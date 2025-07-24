@@ -147,4 +147,18 @@ class AuthController extends Controller {
             $this->error("An error occurred: " . $e->getMessage(), 500);
         }
     }
+
+    public function getMe(): void {
+        $auth = new AuthMiddleware();
+        $user_id = $auth->authenticate()->sub;
+
+        $conn = Connection::get();
+        $stmt = $conn->prepare("SELECT * FROM users WHERE id = ?");
+        $stmt->bind_param("i", $user_id);
+        $stmt->execute();
+
+        $result = $stmt->get_result();
+        $user = $result->fetch_assoc();
+        $this->json($user);
+    }
 }

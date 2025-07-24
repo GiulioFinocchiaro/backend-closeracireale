@@ -14,6 +14,7 @@ use Controllers\CampaignEventsController;
 /** @var \Core\Router $router */
 $router->add('POST', '/api/auth/login', AuthController::class, 'login');
 $router->add("POST", "/api/auth/register", AuthController::class, 'register');
+$router->add("GET", "/api/auth/me", AuthController::class, 'getMe');
 $router->add("PUT", "/api/users/update", UserController::class, 'updateUser');
 $router->add("DELETE", "/api/users/delete", UserController::class, 'deleteUser');
 $router->add("POST", "/api/schools/add", SchoolController::class, 'addSchool');
