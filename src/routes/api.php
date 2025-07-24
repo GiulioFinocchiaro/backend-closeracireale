@@ -1,0 +1,56 @@
+<?php
+
+use Controllers\AuthController;
+use Controllers\CampaignMaterialsController;
+use Controllers\CampaignsController;
+use Controllers\MediaController;
+use Controllers\ProgramsController;
+use Controllers\RoleController;
+use Controllers\SchoolController;
+use Controllers\UserController;
+use Controllers\CandidatesController;
+use Controllers\CampaignEventsController;
+
+/** @var \Core\Router $router */
+$router->add('POST', '/api/auth/login', AuthController::class, 'login');
+$router->add("POST", "/api/auth/register", AuthController::class, 'register');
+$router->add("PUT", "/api/users/update", UserController::class, 'updateUser');
+$router->add("DELETE", "/api/users/delete", UserController::class, 'deleteUser');
+$router->add("POST", "/api/schools/add", SchoolController::class, 'addSchool');
+$router->add("PUT", "/api/schools/update", SchoolController::class, 'updateSchool');
+$router->add("DELETE", "/api/schools/delete", SchoolController::class, 'deleteSchool');
+$router->add("GET", "/api/schools/get", SchoolController::class, 'getSingleSchool');
+$router->add("GET", "/api/schools/get_all", SchoolController::class, 'getAllSchools');
+$router->add("POST", "/api/candidates/add", CandidatesController::class, 'addCandidates');
+$router->add("GET", "/api/candidates/get_single", CandidatesController::class, 'getSingleCandidates');
+$router->add("GET", "/api/candidates/get_all", CandidatesController::class, 'getAllCandidates');
+$router->add("PUT", "/api/candidates/update", CandidatesController::class, 'updateCandidate');
+$router->add("DELETE", "/api/candidates/delete", CandidatesController::class, 'deleteCandidate');
+$router->add("POST", "/api/roles/add", RoleController::class, 'addRoles');
+$router->add("PUT", "/api/roles/update", RoleController::class, 'updateRole');
+$router->add("DELETE", "/api/roles/delete", RoleController::class, 'deleteRole');
+$router->add("GET", "/api/roles/get_single", RoleController::class, 'getSingleRole');
+$router->add("GET", "/api/roles/get_all", RoleController::class, 'getAllRoles');
+$router->add("POST", "/api/campaigns/add", CampaignsController::class, 'addCampaigns');
+$router->add("PUT", "/api/campaigns/update", CampaignsController::class, 'updateCampaign');
+$router->add("DELETE", "/api/campaigns/delete", CampaignsController::class, 'deleteCampaign');
+$router->add("GET", "/api/campaigns/get_single", CampaignsController::class, 'getSingleCampaign');
+$router->add("GET", "/api/campaigns/get", CampaignsController::class, 'getCampaigns');
+$router->add("POST", "/api/campaigns/events/add", CampaignEventsController::class, 'addCampaignEvent');
+$router->add("PUT", "/api/campaigns/events/update", CampaignEventsController::class, 'updateCampaignEvent');
+$router->add("DELETE", "/api/campaigns/events/delete", CampaignEventsController::class, 'deleteCampaignEvent');
+$router->add("GET", "/api/campaigns/events/get", CampaignEventsController::class, 'getCampaignEvents');
+$router->add("POST", "/api/campaigns/materials/add", CampaignMaterialsController::class, 'addCampaignMaterial');
+$router->add("PUT", "/api/campaigns/materials/update", CampaignMaterialsController::class, 'updateCampaignMaterial');
+$router->add("DELETE", "/api/campaigns/materials/delete", CampaignMaterialsController::class, 'deleteCampaignMaterial');
+$router->add("GET", "/api/campaigns/materials/get", CampaignMaterialsController::class, 'getMaterials');
+$router->add('POST', '/api/programs/add', ProgramsController::class, 'addProgram');
+$router->add('GET', '/api/programs/get_single', ProgramsController::class, 'getSingleProgram');
+$router->add('GET', '/api/programs/get', ProgramsController::class, 'getPrograms');
+$router->add('PUT', '/api/programs/update', ProgramsController::class, 'updateProgram');
+$router->add('DELETE', '/api/programs/delete', ProgramsController::class, 'deleteProgram');
+$router->add('POST', '/api/media/upload', MediaController::class, 'uploadGraphicAsset');
+$router->add('GET', '/api/media/get', MediaController::class, 'getGraphicAssets');
+$router->add('GET', '/api/media/get_single', MediaController::class, 'getSingleGraphicAsset');
+$router->add('PUT', '/api/media/update', MediaController::class, 'updateGraphicAsset');
+$router->add('DELETE', '/api/media/delete', MediaController::class, 'deleteGraphicAsset');
