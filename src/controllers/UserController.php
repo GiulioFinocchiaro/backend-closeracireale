@@ -406,4 +406,28 @@ class UserController extends Controller // Estendi la classe Controller
 
         $this->json(['message' => 'Utente eliminato con successo.'], 200);
     }
+
+    /**
+     * Verifica se l'utente autenticato ha un permesso specifico.
+     * I dati sono presi da $this->requestData.
+     * Richiede 'permission_name' nel corpo JSON.
+     *
+     * @return void
+     */
+    public function checkUserPermission(): void
+    {
+        // 1. Recupera il nome del permesso dalla richiesta
+        $permissionName = $this->requestData['permission_name'] ?? null;
+
+        if (empty($permissionName)) {
+            $this->error('Nome del permesso mancante nella richiesta.', 400);
+            return;
+        }
+
+        // 2. Verifica se l'utente autenticato ha il permesso
+        $hasPermission = $this->permissionChecker->userHasPermission($this->currentUserId, $permissionName);
+
+        // 3. Restituisci la risposta JSON
+        $this->json(['permission_name' => $permissionName, 'has_permission' => $hasPermission], 200);
+    }
 }
