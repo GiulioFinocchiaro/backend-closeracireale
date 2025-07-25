@@ -83,7 +83,7 @@ class SchoolController extends Controller
 
         // 2. Verifica unicità school_name
         $stmt_check = $conn->prepare("SELECT id FROM schools WHERE school_name = ? AND list_name = ? LIMIT 1;");
-        $stmt_check->bind_param('s', $schoolName, $listName);
+        $stmt_check->bind_param('ss', $schoolName, $listName);
         $stmt_check->execute();
         $stmt_check->store_result();
         if ($stmt_check->num_rows > 0) {
@@ -95,7 +95,7 @@ class SchoolController extends Controller
 
         // 3. Inserisci la nuova scuola
         $stmt_insert = $conn->prepare("INSERT INTO schools (school_name, list_name) VALUES (?, ?);");
-        $stmt_insert->bind_param('sss', $schoolName, $listName);
+        $stmt_insert->bind_param('ss', $schoolName, $listName);
 
         if (!$stmt_insert->execute()) {
             $this->error('Errore durante l\'aggiunta della scuola: ' . $conn->error, 500);
@@ -357,7 +357,7 @@ class SchoolController extends Controller
         }
 
         // Aggiunto display_name alla SELECT
-        $sql = "SELECT id, school_name, display_name, list_name, created_at FROM schools";
+        $sql = "SELECT id, school_name, list_name, created_at FROM schools";
         $params = [];
         $types = '';
 
