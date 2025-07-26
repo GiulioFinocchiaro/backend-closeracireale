@@ -365,7 +365,7 @@ class RoleController extends Controller
             return;
         }
 
-        $stmt = $conn->prepare("SELECT id, name, description, level FROM roles WHERE id = ? LIMIT 1;");
+        $stmt = $conn->prepare("SELECT id, name, description, level, color FROM roles WHERE id = ? LIMIT 1;");
         $stmt->bind_param('i', $roleId);
         $stmt->execute();
         $result = $stmt->get_result();
@@ -378,6 +378,37 @@ class RoleController extends Controller
             $this->error('Ruolo non trovato.', 404);
         }
     }
+
+    public function getMineRoles(): void
+    {
+        $conn = Connection::get();
+
+        $stmt = $conn->prepare("
+        SELECT r.id, r.name, r.level, r.color
+        FROM roles r
+        INNER JOIN user_role ur ON ur.role_id = r.id
+        WHERE ur.user_id = ?
+        ORDER BY r.level DESC;
+    ");
+
+        $stmt->bind_param('i', $this->currentUserId);
+        $stmt->execute();
+        $result = $stmt->get_result();
+
+        $roles = [];
+        while ($row = $result->fetch_assoc()) {
+            $roles[] = $row;
+        }
+
+        $stmt->close();
+
+        if (!empty($roles)) {
+            $this->json($roles, 200);
+        } else {
+            $this->error('Nessun ruolo trovato per l\'utente.', 404);
+        }
+    }
+
 
     /**
      * Visualizza un elenco di tutti i ruoli.

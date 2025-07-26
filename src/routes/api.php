@@ -10,8 +10,10 @@ use Controllers\SchoolController;
 use Controllers\UserController;
 use Controllers\CandidatesController;
 use Controllers\CampaignEventsController;
+use Core\AuthMiddleware;
 
 /** @var \Core\Router $router */
+$router->add("GET", "/api/auth/authenticate", AuthMiddleware::class, "authenticate");
 $router->add('POST', '/api/auth/login', AuthController::class, 'login');
 $router->add("POST", "/api/auth/register", AuthController::class, 'register');
 $router->add("GET", "/api/auth/me", AuthController::class, 'getMe');
@@ -33,6 +35,7 @@ $router->add("PUT", "/api/roles/update", RoleController::class, 'updateRole');
 $router->add("DELETE", "/api/roles/delete", RoleController::class, 'deleteRole');
 $router->add("GET", "/api/roles/get_single", RoleController::class, 'getSingleRole');
 $router->add("GET", "/api/roles/get_all", RoleController::class, 'getAllRoles');
+$router->add("GET", "/api/roles/get_mine_roles", RoleController::class, 'getMineRoles');
 $router->add("POST", "/api/campaigns/add", CampaignsController::class, 'addCampaigns');
 $router->add("PUT", "/api/campaigns/update", CampaignsController::class, 'updateCampaign');
 $router->add("DELETE", "/api/campaigns/delete", CampaignsController::class, 'deleteCampaign');
