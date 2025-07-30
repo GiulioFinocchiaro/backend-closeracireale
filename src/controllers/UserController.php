@@ -171,11 +171,9 @@ class UserController extends Controller // Estendi la classe Controller
             $types .= 'i';
         }
 
-        if (isset($this->requestData['role'])) {
-            $roleToAssign = $this->requestData['role'];
-            // Verifica permesso specifico per assegnare ruoli
+        if (isset($this->requestData['role']) && is_array($this->requestData['role'])) {
+            $roleIdsToAssign = $this->requestData['role'];
             $canAssignRoles = $this->permissionChecker->userHasPermission($this->currentUserId, 'users.assign_roles');
-            // Verifica permesso per elevare privilegi
             $canElevatePrivileges = $this->permissionChecker->userHasPermission($this->currentUserId, 'users.elevate_privileges');
 
             if (!$canAssignRoles) {
@@ -183,58 +181,62 @@ class UserController extends Controller // Estendi la classe Controller
                 return;
             }
 
-            // Recupera l'ID del nuovo ruolo
-            $stmt_new_role = $conn->prepare("SELECT id, level FROM roles WHERE name = ? LIMIT 1;");
-            $stmt_new_role->bind_param('s', $roleToAssign);
-            $stmt_new_role->execute();
-            $stmt_new_role->bind_result($newRoleId, $newRoleLevel);
-            $stmt_new_role->fetch();
-            $stmt_new_role->close();
+            // Prendi i livelli dei ruoli da assegnare
+            $placeholders = implode(',', array_fill(0, count($roleIdsToAssign), '?'));
+            $roleTypes = str_repeat('i', count($roleIdsToAssign));
+            $stmt = $conn->prepare("SELECT id, level FROM roles WHERE id IN ($placeholders)");
+            $stmt->bind_param($roleTypes, ...$roleIdsToAssign);
+            $stmt->execute();
+            $result = $stmt->get_result();
 
-            if ($newRoleId === null) {
-                $this->error('Ruolo specificato non valido.', 400);
+            $validRoles = [];
+            while ($row = $result->fetch_assoc()) {
+                $validRoles[] = $row;
+            }
+            $stmt->close();
+
+            if (count($validRoles) !== count($roleIdsToAssign)) {
+                $this->error('Uno o più ruoli specificati non sono validi.', 400);
                 return;
             }
 
-            // Recupera il livello massimo del ruolo dell'utente corrente
             $currentUserMaxRoleLevel = $this->permissionChecker->getUserMaxRoleLevel($this->currentUserId);
-            // Recupera il livello massimo del ruolo attuale dell'utente target
             $targetUserMaxRoleLevel = $this->permissionChecker->getUserMaxRoleLevel($userIdToModify);
 
-            // Regole di gerarchia:
-            // Se l'utente corrente NON ha il permesso di elevare privilegi (cioè non è un Super Admin):
             if (!$canElevatePrivileges) {
-                // 1. Non può assegnare un ruolo con livello uguale o superiore al suo livello massimo.
-                if ($newRoleLevel >= $currentUserMaxRoleLevel) {
-                    $this->error('Accesso negato: Non puoi assegnare un ruolo con privilegi pari o superiori ai tuoi.', 403);
-                    return;
+                foreach ($validRoles as $role) {
+                    if ($role['level'] > $currentUserMaxRoleLevel) {
+                        $this->error('Accesso negato: Non puoi assegnare un ruolo con privilegi superiori ai tuoi.', 403);
+                        return;
+                    }
                 }
-                // 2. Non può modificare un utente che ha un ruolo con livello uguale o superiore al suo livello massimo.
-                if ($targetUserMaxRoleLevel >= $currentUserMaxRoleLevel) {
-                    $this->error('Accesso negato: Non puoi modificare il ruolo di un utente con privilegi pari o superiori ai tuoi.', 403);
+                if ($targetUserMaxRoleLevel > $currentUserMaxRoleLevel) {
+                    $this->error('Accesso negato: Non puoi modificare il ruolo di un utente con privilegi superiori ai tuoi.', 403);
                     return;
                 }
             }
 
-            // Elimina i ruoli esistenti dell'utente e assegna il nuovo ruolo
-            $conn->begin_transaction(); // Inizia una transazione per atomicita'
+            $conn->begin_transaction();
             try {
-                $stmt_delete_roles = $conn->prepare("DELETE FROM user_role WHERE user_id = ?;");
+                // Elimina ruoli precedenti
+                $stmt_delete_roles = $conn->prepare("DELETE FROM user_role WHERE user_id = ?");
                 $stmt_delete_roles->bind_param('i', $userIdToModify);
                 $stmt_delete_roles->execute();
                 $stmt_delete_roles->close();
 
-                $stmt_add_role = $conn->prepare("INSERT INTO user_role (user_id, role_id) VALUES (?, ?);");
-                $stmt_add_role->bind_param('ii', $userIdToModify, $newRoleId);
-                $stmt_add_role->execute();
+                // Assegna i nuovi ruoli
+                $stmt_add_role = $conn->prepare("INSERT INTO user_role (user_id, role_id) VALUES (?, ?)");
+                foreach ($validRoles as $role) {
+                    $stmt_add_role->bind_param('ii', $userIdToModify, $role['id']);
+                    $stmt_add_role->execute();
+                }
                 $stmt_add_role->close();
 
-                $conn->commit(); // Conferma la transazione
+                $conn->commit();
             } catch (\Exception $e) {
-                $conn->rollback(); // Annulla la transazione in caso di errore
-                error_log("Errore durante la modifica del ruolo utente: " . $e->getMessage());
-                $this->error('Errore durante la modifica del ruolo dell\'utente.', 500);
-                return;
+                $conn->rollback();
+                error_log("Errore durante la modifica dei ruoli utente: " . $e->getMessage());
+                $this->error("Errore durante l'assegnazione dei ruoli.", 500);
             }
         }
 
@@ -486,9 +488,9 @@ class UserController extends Controller // Estendi la classe Controller
                 users u
             LEFT JOIN
                 user_role ur ON u.id = ur.user_id
-            WHERE
+            WHERE 
                 u.school_id = ?
-            GROUP BY
+            GROUP BY 
                 u.id, u.name, u.email
         ");
         $stmt->bind_param('i', $schoolIdToFetch);
