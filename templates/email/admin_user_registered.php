@@ -11,7 +11,7 @@ $dotenv->load();
 
 $support_email = $_ENV["MAIL_SUPPORT"] ?? "supporto@email.it";
 $platform_name = $_ENV["PLATFORM_NAME"] ?? "piattaforma";
-$name = $name ?? 'utente';
+$admin_name = $admin_name ?? 'utente';
 $email = $email ?? 'account';
 $password = $password ?? '********';
 ?>
@@ -125,21 +125,17 @@ $password = $password ?? '********';
 <body>
 <div class="container">
     <div class="header">
-        <h1>🎉 Benvenuto su <?= htmlspecialchars($platform_name)?>!</h1>
+        <h1>Hai registranto un utente su <?= htmlspecialchars($platform_name)?>!</h1>
     </div>
     <div class="content">
-        <p>Ciao <strong><?= htmlspecialchars($name) ?></strong>,</p>
-        <p>Il tuo account è stato creato con successo da un amministratore.</p>
+        <p>Ciao <strong><?= htmlspecialchars($admin_name) ?></strong>,</p>
+        <p>Hai registrato un account con i poteri di amministratore su questa piattaforma.</p>
 
-        <h2>Le tue credenziali d'accesso:</h2>
+        <h2>Le sue credenziali d'accesso:</h2>
         <div class="credentials">
             Username: <strong><?= htmlspecialchars($email) ?></strong><br>
             Password: <strong><?= htmlspecialchars($password) ?></strong>
         </div>
-
-        <p>Ti consigliamo di cambiare la password al primo accesso per motivi di sicurezza.</p>
-
-        <p>✨ Siamo entusiasti di averti con noi nella community di <strong><?= htmlspecialchars($platform_name)?></strong>!</p>
     </div>
     <div class="footer">
         <p><strong>❗ NON rispondere a questa email</strong>: è inviata automaticamente e non viene monitorata.</p>

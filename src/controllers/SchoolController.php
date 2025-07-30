@@ -292,46 +292,55 @@ class SchoolController extends Controller
     }
 
     /**
-     * Visualizza i dettagli di una singola scuola.
-     * L'ID della scuola da visualizzare è preso da $this->requestData['id'].
-     * Permessi:
-     * - 'schools.view_all' (visualizza qualsiasi scuola)
-     * - 'schools.view_own' (visualizza solo la propria scuola, se associato)
-     *
-     * @return void
+     * Recupera i dettagli di una singola scuola associata all'utente corrente.
+     * L'ID della scuola viene preso dal parametro 'school_id' dell'utente autenticato,
+     * non dai parametri della richiesta REST.
+     * Richiede il permesso 'schools.view_own'.
      */
-    public function getSingleSchool(): void
+    public function getSingleSchoolMine(): void
     {
         $conn = Connection::get();
 
-        $schoolId = $this->requestData['id'] ?? null;
-        if ($schoolId === null) {
-            $this->error('ID scuola da visualizzare mancante nella richiesta.', 400);
+        // L'ID della scuola viene preso direttamente dalla school_id dell'utente corrente.
+        // Assumiamo che $this->currentUserSchoolId sia una proprietà già popolata
+        // dall'oggetto utente autenticato o dalla sessione.
+        $schoolIdToView = $this->currentUserSchoolId;
+
+        // Verifica se l'utente è effettivamente associato a una scuola.
+        // Se currentUserSchoolId è null, l'utente non ha una scuola assegnata.
+        if ($schoolIdToView === null) {
+            $this->error('L\'utente non è associato a nessuna scuola.', 400); // Bad Request o Forbidden, a seconda della logica di business.
             return;
         }
 
-        // Verifica il permesso per visualizzare la propria scuola
+        // Verifica il permesso specifico per visualizzare la propria scuola.
         $canViewOwnSchool = $this->permissionChecker->userHasPermission($this->currentUserId, 'schools.view_own');
 
-        // L'utente deve avere il permesso di vedere tutte le scuole,
-        // oppure deve avere il permesso di vedere la propria scuola E l'ID richiesto è la sua school_id.
-        if (!($canViewOwnSchool && $this->currentUserSchoolId === $schoolId)) {
-            $this->error('Accesso negato: Permessi insufficienti per visualizzare questa scuola.', 403);
+        // Se l'utente non ha il permesso di visualizzare la propria scuola, nega l'accesso.
+        // Non è più necessario confrontare l'ID della richiesta, dato che l'ID della scuola
+        // da visualizzare è intrinsecamente quello dell'utente corrente.
+        if (!$canViewOwnSchool) {
+            $this->error('Accesso negato: Permessi insufficienti per visualizzare la propria scuola.', 403);
             return;
         }
 
-        // Aggiunto display_name alla SELECT
-        $stmt = $conn->prepare("SELECT id, school_name, display_name, list_name, created_at FROM schools WHERE id = ? LIMIT 1;");
-        $stmt->bind_param('i', $schoolId);
+        // Prepara ed esegui la query per recuperare i dettagli della scuola.
+        // Viene usato l'ID della scuola dell'utente corrente.
+        $stmt = $conn->prepare("SELECT id, school_name, list_name, created_at FROM schools WHERE id = ? LIMIT 1;");
+        $stmt->bind_param('i', $schoolIdToView); // Usa l'ID della scuola dell'utente
         $stmt->execute();
         $result = $stmt->get_result();
         $school = $result->fetch_assoc();
         $stmt->close();
 
+        // Restituisce la scuola se trovata, altrimenti un errore.
         if ($school) {
             $this->json($school, 200);
         } else {
-            $this->error('Scuola non trovata.', 404);
+            // Questo caso dovrebbe essere raro se $schoolIdToView è valido,
+            // ma potrebbe accadere se la scuola è stata eliminata dal database
+            // dopo che l'utente è stato autenticato.
+            $this->error('Scuola associata all\'utente non trovata nel database.', 404);
         }
     }
 

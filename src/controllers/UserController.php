@@ -105,10 +105,10 @@ class UserController extends Controller // Estendi la classe Controller
 
         // 2. Verifica Autorizzazione
         // Super Admin può fare tutto
-        $canManageAllUsers = $this->permissionChecker->userHasPermission($this->currentUserId, 'users.manage_all_users');
+        $canManageAllUsers = $this->permissionChecker->userHasPermission($this->currentUserId, 'users.edit.all');
 
         // Admin può gestire utenti nella propria sezione
-        $canManageOwnSectionUsers = $this->permissionChecker->userHasPermission($this->currentUserId, 'users.manage_own_section_users');
+        $canManageOwnSectionUsers = $this->permissionChecker->userHasPermission($this->currentUserId, 'users.edit.own_section');
         $isOwnSectionUser = ($this->currentUserSchoolId !== null && $this->currentUserSchoolId === $targetUserSchoolId);
 
         // L'utente corrente può modificare l'utente target se:
@@ -153,14 +153,12 @@ class UserController extends Controller // Estendi la classe Controller
             $types .= 's';
         }
         if (isset($this->requestData['password'])) {
-            if (strlen($this->requestData['password']) < 6) {
-                $this->error('La nuova password deve contenere almeno 6 caratteri.', 400);
-                return;
+            if ($this->requestData['password']){
+                $updateFields[] = "password_hash = ?";
+                $bindParams[] = password_hash($_ENV["PASSWORD_NEW_USER_DEFAULT"], PASSWORD_BCRYPT);
+                $types .= 's';
+                $passwordUpdated = true; // Imposta il flag
             }
-            $updateFields[] = "password_hash = ?";
-            $bindParams[] = password_hash($this->requestData['password'], PASSWORD_BCRYPT);
-            $types .= 's';
-            $passwordUpdated = true; // Imposta il flag
         }
         if (isset($this->requestData['school_id'])) { // Permetti anche la modifica della school_id, se necessario
             // Solo Super Admin può modificare la school_id di altri utenti
@@ -358,10 +356,10 @@ class UserController extends Controller // Estendi la classe Controller
 
         // 2. Verifica Autorizzazione
         // Super Admin può fare tutto
-        $canManageAllUsers = $this->permissionChecker->userHasPermission($this->currentUserId, 'users.manage_all_users');
+        $canManageAllUsers = $this->permissionChecker->userHasPermission($this->currentUserId, 'users.delete.all');
 
         // Admin può gestire utenti nella propria sezione
-        $canManageOwnSectionUsers = $this->permissionChecker->userHasPermission($this->currentUserId, 'users.manage_own_section_users');
+        $canManageOwnSectionUsers = $this->permissionChecker->userHasPermission($this->currentUserId, 'users.delete.own_section');
         $isOwnSectionUser = ($this->currentUserSchoolId !== null && $this->currentUserSchoolId === $targetUserSchoolId);
 
         // L'utente corrente può eliminare l'utente target se:
@@ -429,5 +427,96 @@ class UserController extends Controller // Estendi la classe Controller
 
         // 3. Restituisci la risposta JSON
         $this->json(['permission_name' => $permissionName, 'has_permission' => $hasPermission], 200);
+    }
+
+    /**
+     * Restituisce tutti gli utenti di una scuola.
+     * Se l'utente ha il permesso 'schools.view_all' può specificare una school_id.
+     * Altrimenti, si limita alla propria scuola.
+     */
+    public function getUsersBySchool(): void
+    {
+        $conn = Connection::get();
+
+        // Di default, usa la school_id dell'utente autenticato
+        $schoolIdToFetch = $this->currentUserSchoolId;
+
+        // Verifica se l'utente ha il permesso di vedere tutte le scuole
+        $canViewAllSchools = $this->permissionChecker->userHasPermission($this->currentUserId, 'schools.view_all');
+
+        // Se l'utente può vedere tutte le scuole E ha specificato una school_id nella richiesta,
+        // allora usa quella school_id.
+        if ($canViewAllSchools && isset($this->requestData['school_id'])) {
+            $canViewAllUsers = $this->permissionChecker->userHasPermission($this->currentUserId, 'users.view_all_users');
+            if (!$canViewAllUsers) {
+                $this->error("Accesso Negato: Non hai i permessi per vedere tutti gli utenti", 403);
+            }else {
+                // È buona pratica validare e sanificare l'input
+                $requestedSchoolId = intval($this->requestData['school_id']);
+                // Assicurati che l'ID richiesto sia valido (es. > 0)
+                if ($requestedSchoolId > 0) {
+                    $schoolIdToFetch = $requestedSchoolId;
+                }
+            }
+        } else {
+            $canViewOwnUsers = $this->permissionChecker->userHasPermission($this->currentUserId, 'users.view.own_section');
+            if (!$canViewOwnUsers) {
+                $this->error("Accesso Negato: Non hai i permessi per vedere gli utenti", 403);
+            }
+        }
+
+        // Se, dopo i controlli, non abbiamo un ID scuola valido (es. utente non associato a scuola
+        // e non ha permesso di vedere tutte le scuole o non ha specificato un ID valido),
+        // restituisci un errore.
+        if ($schoolIdToFetch === null || $schoolIdToFetch <= 0) {
+            $this->error('ID della scuola non disponibile o non valido per il recupero degli utenti.', 400);
+            return;
+        }
+
+        // Prepara la query per recuperare gli utenti.
+        // Ho aggiunto la colonna 'roles' alla SELECT. Assicurati che esista nella tua tabella 'users'.
+        // Se i ruoli sono in una tabella separata, avrai bisogno di un JOIN.
+        $stmt = $conn->prepare("
+            SELECT
+                u.id,
+                u.name,
+                u.email,
+                GROUP_CONCAT(ur.role_id) AS role_ids
+            FROM
+                users u
+            LEFT JOIN
+                user_role ur ON u.id = ur.user_id
+            WHERE
+                u.school_id = ?
+            GROUP BY
+                u.id, u.name, u.email
+        ");
+        $stmt->bind_param('i', $schoolIdToFetch);
+
+        if (!$stmt->execute()) {
+            $this->error('Errore durante il recupero degli utenti: ' . $conn->error, 500);
+            return;
+        }
+
+        $result = $stmt->get_result();
+        $usersData = $result->fetch_all(MYSQLI_ASSOC);
+        $stmt->close();
+
+        // Processa i dati per convertire la stringa 'role_ids' in un array di interi
+        $processedUsers = [];
+        foreach ($usersData as $user) {
+            $roles = [];
+            if (!empty($user['role_ids'])) {
+                // Splitta la stringa di ID e converti ogni elemento in un intero
+                $roles = array_map('intval', explode(',', $user['role_ids']));
+            }
+            // Rimuovi la chiave 'role_ids' dalla riga originale e aggiungi l'array 'roles'
+            unset($user['role_ids']);
+            $user['roles'] = $roles;
+            $processedUsers[] = $user;
+        }
+
+        // Restituisce gli utenti processati in formato JSON
+        $this->json(['users' => $processedUsers], 200);
     }
 }

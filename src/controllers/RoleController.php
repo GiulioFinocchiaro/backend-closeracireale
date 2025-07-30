@@ -438,4 +438,21 @@ class RoleController extends Controller
 
         $this->json($roles, 200);
     }
+
+    public function getAllNameRoles(): void
+    {
+        $conn = Connection::get();
+        $roles = [];
+
+        $sql = "SELECT * FROM roles";
+        $stmt = $conn->prepare($sql);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        while ($row = $result->fetch_assoc()) {
+            $roles[] = $row;
+        }
+        $stmt->close();
+
+        $this->json($roles, 200);
+    }
 }
