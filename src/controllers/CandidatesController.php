@@ -130,6 +130,55 @@ class CandidatesController extends Controller
     }
 
     /**
+     * Visualizza tutti gli utenti di una scuola che hanno il permesso 'users.can_be_candidate'.
+     * Questo endpoint è utile per popolare il selettore dei candidati.
+     * Permessi: 'candidates.create'
+     * Dati richiesti da JSON: 'school_id'
+     *
+     * @return void
+     */
+    public function getEligibleCandidatesBySchool(): void
+    {
+        // Verifica il permesso richiesto
+        if (!$this->permissionChecker->userHasPermission($this->currentUserId, 'candidates.create')) {
+            $this->error('Accesso negato: Permessi insufficienti per visualizzare gli utenti idonei.', 403);
+            return;
+        }
+
+        $conn = Connection::get();
+
+        // Recupera l'ID della scuola dalla richiesta
+        $schoolId = $this->requestData['school_id'] ?? null;
+        if ($schoolId === null) {
+            $this->error('ID della scuola mancante nella richiesta.', 400);
+            return;
+        }
+
+        // Query per recuperare gli utenti con il permesso 'users.can_be_candidate'
+        $sql = "
+            SELECT
+                u.id,
+                u.name,
+                u.email
+            FROM users u
+            JOIN user_role ur ON u.id = ur.user_id
+            JOIN role_permissions rp ON ur.role_id = rp.role_id
+            JOIN permissions p ON rp.permission_id = p.id
+            WHERE u.school_id = ? AND p.name = 'users.can_be_candidate';
+        ";
+
+        $stmt = $conn->prepare($sql);
+        $stmt->bind_param('i', $schoolId);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $eligibleUsers = $result->fetch_all(MYSQLI_ASSOC);
+        $stmt->close();
+
+        $this->json($eligibleUsers, 200);
+    }
+
+
+    /**
      * Visualizza i dettagli di un singolo candidato.
      * L'ID del candidato da visualizzare è preso da $this->requestData['id'].
      * Permessi:
@@ -177,8 +226,17 @@ class CandidatesController extends Controller
             return;
         }
 
-        // Recupera tutti i dettagli del candidato
-        $stmt = $conn->prepare("SELECT id, user_id, class_year, description, photo, manifesto, created_at, school_id FROM candidates WHERE id = ? LIMIT 1;");
+        // Recupera tutti i dettagli del candidato, INCLUDENDO IL NOME DELL'UTENTE
+        $stmt = $conn->prepare("
+        SELECT
+            c.id, c.user_id, u.name as user_name,
+            c.class_year, c.description, c.photo,
+            c.manifesto, c.created_at, c.school_id
+        FROM candidates c
+        JOIN users u ON c.user_id = u.id
+        WHERE c.id = ?
+        LIMIT 1;
+    ");
         $stmt->bind_param('i', $candidateId);
         $stmt->execute();
         $result = $stmt->get_result();
@@ -189,72 +247,90 @@ class CandidatesController extends Controller
     }
 
     /**
-     * Visualizza un elenco di candidati (tutti, della propria scuola o il proprio profilo).
-     * Permessi:
-     * - 'candidates.view_all' (visualizza tutti i candidati)
-     * - 'candidates.view_own_school' (visualizza candidati della propria scuola)
-     * - 'candidates.view_own_profile' (visualizza il proprio profilo candidato)
+     * Visualizza tutti i candidati se l'utente ha il permesso 'candidates.view_all'.
      *
      * @return void
      */
     public function getAllCandidates(): void
     {
         $conn = Connection::get();
-        $candidates = [];
 
-        // Verifica permessi
+        // Verifica il permesso 'candidates.view_all'
+        if (!$this->permissionChecker->userHasPermission($this->currentUserId, 'candidates.view_all')) {
+            $this->error('Accesso negato: Permessi insufficienti per visualizzare tutti i candidati.', 403);
+            return;
+        }
+
+        $sql = "
+            SELECT
+                c.id, c.user_id, u.name as user_name,
+                c.class_year, c.description, c.photo,
+                c.manifesto, c.created_at, c.school_id
+            FROM candidates c
+            JOIN users u ON c.user_id = u.id;
+        ";
+
+        $stmt = $conn->prepare($sql);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $candidates = $result->fetch_all(MYSQLI_ASSOC);
+        $stmt->close();
+
+        $this->json($candidates, 200);
+    }
+
+    /**
+     * Visualizza i candidati di una scuola specifica.
+     * Permessi richiesti: 'candidates.view_all' o 'candidates.view_own_school'.
+     * L'utente con 'candidates.view_own_school' può vedere solo i candidati della propria scuola.
+     * Dati richiesti da JSON: 'school_id'
+     *
+     * @return void
+     */
+    public function getCandidatesBySchool(): void
+    {
+        $conn = Connection::get();
+
         $canViewAll = $this->permissionChecker->userHasPermission($this->currentUserId, 'candidates.view_all');
         $canViewOwnSchool = $this->permissionChecker->userHasPermission($this->currentUserId, 'candidates.view_own_school');
-        $canViewOwnProfile = $this->permissionChecker->userHasPermission($this->currentUserId, 'candidates.view_own_profile');
 
-        if (!$canViewAll && !$canViewOwnSchool && !$canViewOwnProfile) {
+        if (!$canViewAll && !$canViewOwnSchool) {
             $this->error('Accesso negato: Permessi insufficienti per visualizzare candidati.', 403);
             return;
         }
 
-        $sql = "SELECT id, user_id, class_year, description, photo, manifesto, created_at, school_id FROM candidates";
-        $params = [];
-        $types = '';
-        $whereClauses = [];
-
-        // Filtra per la propria scuola se non può vedere tutti i candidati ma può vedere quelli della propria scuola
-        if (!$canViewAll && $canViewOwnSchool && $this->currentUserSchoolId !== null) {
-            $whereClauses[] = "school_id = ?";
-            $params[] = $this->currentUserSchoolId;
-            $types .= 'i';
+        $schoolId = null;
+        if ($canViewAll) {
+            // L'amministratore può specificare una scuola, altrimenti l'ID è richiesto
+            $schoolId = $this->requestData['school_id'] ?? null;
+            if ($schoolId === null) {
+                $this->error('ID della scuola mancante nella richiesta per i permessi di visualizzazione completa.', 400);
+                return;
+            }
+        } elseif ($canViewOwnSchool) {
+            // L'utente con permessi limitati può visualizzare solo la propria scuola
+            $schoolId = $this->currentUserSchoolId;
+        } else {
+            // Questo caso non dovrebbe essere raggiunto grazie al primo controllo, ma è una sicurezza
+            $this->error('Accesso negato: Permessi insufficienti per visualizzare candidati.', 403);
+            return;
         }
 
-        // Filtra per il proprio profilo se non può vedere tutti/propria scuola ma può vedere il proprio profilo
-        // E se non è già stato incluso da un filtro più ampio (es. view_own_school)
-        if (!$canViewAll && !$canViewOwnSchool && $canViewOwnProfile) {
-            // Se l'utente ha solo il permesso di vedere il proprio profilo, e non è già coperto da view_own_school
-            // Aggiungiamo esplicitamente il filtro per il proprio user_id
-            $whereClauses[] = "user_id = ?";
-            $params[] = $this->currentUserId;
-            $types .= 'i';
-        }
-        // Nota: Se un utente ha sia view_own_school che view_own_profile, e la sua scuola ha altri candidati,
-        // la logica attuale darà priorità a view_own_school se non view_all. Potrebbe essere necessario affinare.
-        // Per ora, se c'è un filtro per school_id, il filtro user_id aggiuntivo non è strettamente necessario
-        // a meno che non si voglia escludere altri candidati della stessa scuola.
-
-        if (!empty($whereClauses)) {
-            $sql .= " WHERE " . implode(' AND ', $whereClauses);
-        }
+        $sql = "
+            SELECT
+                c.id, c.user_id, u.name as user_name,
+                c.class_year, c.description, c.photo,
+                c.manifesto, c.created_at, c.school_id
+            FROM candidates c
+            JOIN users u ON c.user_id = u.id
+            WHERE c.school_id = ?;
+        ";
 
         $stmt = $conn->prepare($sql);
-        if (!empty($params)) {
-            $refs = [];
-            foreach ($params as $key => $value) {
-                $refs[$key] = &$params[$key];
-            }
-            call_user_func_array([$stmt, 'bind_param'], array_merge([$types], $refs));
-        }
+        $stmt->bind_param('i', $schoolId);
         $stmt->execute();
         $result = $stmt->get_result();
-        while ($row = $result->fetch_assoc()) {
-            $candidates[] = $row;
-        }
+        $candidates = $result->fetch_all(MYSQLI_ASSOC);
         $stmt->close();
 
         $this->json($candidates, 200);

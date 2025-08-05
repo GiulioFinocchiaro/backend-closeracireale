@@ -29,9 +29,11 @@ $router->add("GET", "/api/schools/get_all", SchoolController::class, 'getAllScho
 $router->add("POST", "/api/candidates/add", CandidatesController::class, 'addCandidates');
 $router->add("GET", "/api/candidates/get_single", CandidatesController::class, 'getSingleCandidates');
 $router->add("GET", "/api/candidates/get_all", CandidatesController::class, 'getAllCandidates');
+$router->add("POST", "/api/candidates/get_by_school", CandidatesController::class, 'getCandidatesBySchool');
+$router->add("POST", "/api/candidates/get_eligible_candidates_by_school", CandidatesController::class, 'getEligibleCandidatesBySchool');
 $router->add("PUT", "/api/candidates/update", CandidatesController::class, 'updateCandidate');
 $router->add("DELETE", "/api/candidates/delete", CandidatesController::class, 'deleteCandidate');
-$router->add("POST", "/api/roles/add", RoleController::class, 'addRoles');
+$router->add("POST", "/api/roles/add", RoleController::class, 'addRole');
 $router->add("PUT", "/api/roles/update", RoleController::class, 'updateRole');
 $router->add("DELETE", "/api/roles/delete", RoleController::class, 'deleteRole');
 $router->add("GET", "/api/roles/get_single", RoleController::class, 'getSingleRole');
@@ -61,3 +63,5 @@ $router->add('GET', '/api/media/get', MediaController::class, 'getGraphicAssets'
 $router->add('GET', '/api/media/get_single', MediaController::class, 'getSingleGraphicAsset');
 $router->add('PUT', '/api/media/update', MediaController::class, 'updateGraphicAsset');
 $router->add('DELETE', '/api/media/delete', MediaController::class, 'deleteGraphicAsset');
+$router->add("POST", '/api/roles/roles_by_level_or_lower', RoleController::class, 'getRolesByLevelOrLower');
+$router->add("GET", "/api/roles/mine_permissions", RoleController::class, 'getMinePermissions');
