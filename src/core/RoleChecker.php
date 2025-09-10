@@ -204,6 +204,58 @@ class RoleChecker {
     }
 
     /**
+     * Recupera tutti i nomi dei permessi assegnati a un utente.
+     *
+     * @param int $userId L'ID dell'utente.
+     * @return array Un array di stringhe contenente i nomi dei permessi.
+     */
+    public function getUserPermissions(int $userId): array {
+        $conn = Connection::get();
+        if ($conn === null) {
+            error_log("Errore: Connessione al database non disponibile per getUserPermissions.");
+            return [];
+        }
+
+        $permissions = [];
+        $sql = "
+            SELECT DISTINCT
+                p.id
+            FROM
+                users u
+            JOIN
+                user_role ur ON u.id = ur.user_id
+            JOIN
+                roles r ON ur.role_id = r.id
+            JOIN
+                role_permissions rp ON r.id = rp.role_id
+            JOIN
+                permissions p ON rp.permission_id = p.id
+            WHERE
+                u.id = ?;
+        ";
+
+        try {
+            $stmt = $conn->prepare($sql);
+            if ($stmt === false) {
+                error_log("Errore di preparazione dello statement MySQLi in getUserPermissions: " . $conn->error);
+                return [];
+            }
+            $stmt->bind_param('i', $userId);
+            $stmt->execute();
+            $stmt->bind_result($permissionName);
+
+            while ($stmt->fetch()) {
+                $permissions[] = $permissionName;
+            }
+            $stmt->close();
+            return $permissions;
+        } catch (\Exception $e) {
+            error_log("Errore in getUserPermissions (MySQLi): " . $e->getMessage());
+            return [];
+        }
+    }
+
+    /**
      * Recupera il livello di un ruolo dato il suo nome.
      *
      * @param string $roleName Il nome del ruolo (es. 'super_admin').
