@@ -63,8 +63,9 @@ class MediaController extends Controller
             $this->canViewOwn = $this->permissionChecker->userHasPermission($this->currentUserId, "media.view_own_school");
 
             if ($this->canViewAll) {
-                $schoolId = $this->requestData["school_id"] ?? null;
+                $schoolId = $_POST["school_id"] ?? $this->requestData["school_id"] ?? null;
                 if ($schoolId === null) {
+                    echo $schoolId;
                     $this->error("`school_id` obbligatorio per visualizzare asset di un'altra scuola.", 400);
                     return;
                 }
@@ -120,32 +121,15 @@ class MediaController extends Controller
         $conn->begin_transaction();
 
         try {
-            // Determina permessi di upload
-            $canUploadAll = $this->permissionChecker->userHasPermission($this->currentUserId, 'media.upload_all');
-            $canUploadOwn = $this->permissionChecker->userHasPermission($this->currentUserId, 'media.upload');
+            $canUpload = $this->permissionChecker->userHasPermission($this->currentUserId, "media.upload");
 
-            $uploadSchoolId = null;
-            $targetSchoolId = $_POST['school_id'] ?? null;
-
-            if ($canUploadAll) {
-                if ($targetSchoolId === null) {
-                    $this->error('`school_id` obbligatorio per chi ha permesso di upload completo.', 400);
-                    $conn->rollback();
-                    return;
-                }
-                $uploadSchoolId = (int)$targetSchoolId;
-            } elseif ($canUploadOwn) {
-                $uploadSchoolId = $this->currentUserSchoolId;
-                if ($targetSchoolId !== null && (int)$targetSchoolId !== $uploadSchoolId) {
-                    $this->error('Non hai permessi per caricare asset in un\'altra scuola.', 403);
-                    $conn->rollback();
-                    return;
-                }
-            } else {
+            if (!$canUpload) {
                 $this->error('Permessi insufficienti per caricare asset grafici.', 403);
                 $conn->rollback();
                 return;
             }
+
+            $uploadSchoolId = $this->effectiveSchoolId;
 
             if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
                 $this->error('Nessun file caricato o errore nel caricamento.', 400);
@@ -177,7 +161,7 @@ class MediaController extends Controller
 
             $uniqueFileName = uniqid('asset_', true) . '.' . $fileExtension;
             $destinationPath = $this->uploadDir . $uniqueFileName;
-            $relativePath = 'uploads/graphic_assets/' . $uniqueFileName;
+            $relativePath = $uniqueFileName;
 
             if (!move_uploaded_file($fileTmpName, $destinationPath)) {
                 $this->error('Errore spostamento file.', 500);
@@ -364,8 +348,8 @@ class MediaController extends Controller
                 return;
             }
 
-            $stmt_delete = $conn->prepare("DELETE FROM graphic_assets WHERE id = ?");
-            $stmt_delete->bind_param('i', $assetId);
+            $stmt_delete = $conn->prepare("DELETE FROM graphic_assets WHERE id = ? AND school_id = ?");
+            $stmt_delete->bind_param('ii', $assetId, $this->effectiveSchoolId);
             if (!$stmt_delete->execute()) {
                 throw new Exception('Errore eliminazione DB: ' . $conn->error);
             }
