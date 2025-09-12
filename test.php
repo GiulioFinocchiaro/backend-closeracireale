@@ -1,37 +1,15 @@
 <?php
-error_reporting(E_ALL);
-ini_set('display_errors', 1);
+echo __DIR__;
+$dir = __DIR__ . '/cdn/';
+$file = $dir . 'test.txt';
 
-// Prova prima la tua riga originale
-$authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? null;
-if (is_null($authHeader) && isset($_SERVER['REDIRECT_HTTP_AUTHORIZATION'])) {
-    $authHeader = $_SERVER['REDIRECT_HTTP_AUTHORIZATION'];
+if (!is_dir($dir)) {
+    die("Cartella NON esiste!");
 }
 
-echo "AuthHeader da \$_SERVER: " . ($authHeader ?? 'NULL') . "<br><br>";
-
-echo "Headers da getallheaders():<br>";
-$allHeaders = getallheaders();
-if ($allHeaders) {
-    foreach ($allHeaders as $name => $value) {
-        echo htmlspecialchars($name) . ": " . htmlspecialchars($value) . "<br>";
-    }
-} else {
-    echo "getallheaders() non disponibile o non restituisce headers.<br>";
+if (!is_writable($dir)) {
+    die("Cartella NON scrivibile!");
 }
-echo "<br>";
 
-if (function_exists('apache_request_headers')) {
-    echo "Headers da apache_request_headers():<br>";
-    $apacheHeaders = apache_request_headers();
-    if ($apacheHeaders) {
-        foreach ($apacheHeaders as $name => $value) {
-            echo htmlspecialchars($name) . ": " . htmlspecialchars($value) . "<br>";
-        }
-    } else {
-        echo "apache_request_headers() non restituisce headers.<br>";
-    }
-} else {
-    echo "apache_request_headers() non è disponibile.<br>";
-}
-?>
+file_put_contents($file, "ok");
+echo "Funzionante!";

@@ -59,7 +59,7 @@ $router->add('GET', '/api/programs/get', ProgramsController::class, 'getPrograms
 $router->add('PUT', '/api/programs/update', ProgramsController::class, 'updateProgram');
 $router->add('DELETE', '/api/programs/delete', ProgramsController::class, 'deleteProgram');
 $router->add('POST', '/api/media/upload', MediaController::class, 'uploadGraphicAsset');
-$router->add('GET', '/api/media/get', MediaController::class, 'getGraphicAssets');
+$router->add('POST', '/api/media/get', MediaController::class, 'getGraphicAssets');
 $router->add('GET', '/api/media/get_single', MediaController::class, 'getSingleGraphicAsset');
 $router->add('PUT', '/api/media/update', MediaController::class, 'updateGraphicAsset');
 $router->add('DELETE', '/api/media/delete', MediaController::class, 'deleteGraphicAsset');
