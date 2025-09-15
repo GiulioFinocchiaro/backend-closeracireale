@@ -40,11 +40,11 @@ $router->add("GET", "/api/roles/get_single", RoleController::class, 'getSingleRo
 $router->add("GET", "/api/roles/get_all", RoleController::class, 'getAllRoles');
 $router->add("GET", "/api/roles/get_all_name", RoleController::class, 'getAllNameRoles');
 $router->add("GET", "/api/roles/get_mine_roles", RoleController::class, 'getMineRoles');
-$router->add("POST", "/api/campaigns/add", CampaignsController::class, 'addCampaigns');
+$router->add("POST", "/api/campaigns/add", CampaignsController::class, 'addCampaign');
 $router->add("PUT", "/api/campaigns/update", CampaignsController::class, 'updateCampaign');
 $router->add("DELETE", "/api/campaigns/delete", CampaignsController::class, 'deleteCampaign');
 $router->add("GET", "/api/campaigns/get_single", CampaignsController::class, 'getSingleCampaign');
-$router->add("GET", "/api/campaigns/get", CampaignsController::class, 'getCampaigns');
+$router->add("POST", "/api/campaigns/get", CampaignsController::class, 'getCampaigns');
 $router->add("POST", "/api/campaigns/events/add", CampaignEventsController::class, 'addCampaignEvent');
 $router->add("PUT", "/api/campaigns/events/update", CampaignEventsController::class, 'updateCampaignEvent');
 $router->add("DELETE", "/api/campaigns/events/delete", CampaignEventsController::class, 'deleteCampaignEvent');

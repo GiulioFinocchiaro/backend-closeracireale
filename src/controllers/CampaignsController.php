@@ -14,6 +14,8 @@ class CampaignsController extends Controller
     private ?int $currentUserId = null; // ID dell'utente autenticato (INT)
     private ?int $currentUserSchoolId = null; // school_id dell'utente autenticato
     private array $requestData; // Per i dati JSON in input
+    private bool $canViewAll;
+    private bool $canViewOwn;
 
     public function __construct()
     {
@@ -32,13 +34,29 @@ class CampaignsController extends Controller
             $decodedToken = $this->authMiddleware->authenticate();
             $this->currentUserId = $decodedToken->sub; // Sarà un INT dal JWT
 
-            // Recupera la school_id dell'utente corrente all'avvio del controller
-            $stmt = $dbConnection->prepare("SELECT school_id FROM users WHERE id = ? LIMIT 1;");
-            $stmt->bind_param('i', $this->currentUserId); // Bind come INT
-            $stmt->execute();
-            $stmt->bind_result($this->currentUserSchoolId);
-            $stmt->fetch();
-            $stmt->close();
+            // ===============================
+            // LOGICA PER PERMESSI E SCHOOL_ID
+            // ===============================
+            $this->canViewAll = $this->permissionChecker->userHasPermission($this->currentUserId, "campaign.view_all");
+            $this->canViewOwn = $this->permissionChecker->userHasPermission($this->currentUserId, "campaign.view_own_school");
+
+            if ($this->canViewAll) {
+                $schoolId = $_POST["school_id"] ?? $this->requestData["school_id"] ?? null;
+                if ($schoolId === null) {
+                    echo $schoolId;
+                    $this->error("`school_id` obbligatorio per visualizzare asset di un'altra scuola.", 400);
+                    return;
+                }
+                $this->currentUserSchoolId = (int) $schoolId;
+            } elseif ($this->canViewOwn) {
+                if (isset($this->requestData["school_id"]) && (int)$this->requestData["school_id"] !== $this->currentUserSchoolId) {
+                    $this->error("Non hai i permessi per accedere agli asset di un'altra scuola.", 403);
+                    return;
+                }
+            } else {
+                $this->error("Accesso negato: permessi insufficienti.", 403);
+                return;
+            }
 
         } catch (\Exception $e) {
             $this->error('Autenticazione fallita: ' . $e->getMessage(), 401);
@@ -56,7 +74,7 @@ class CampaignsController extends Controller
     public function addCampaign(): void
     {
         // Check permission
-        if (!$this->permissionChecker->userHasPermission($this->currentUserId, 'campaigns.create')) {
+        if (!$this->permissionChecker->userHasPermission($this->currentUserId, 'campaign.add')) {
             $this->error('Access denied: Insufficient permissions to create campaigns.', 403);
             return;
         }
@@ -66,7 +84,7 @@ class CampaignsController extends Controller
 
         try {
             // 1. Retrieve and validate campaign data
-            if (!isset($this->requestData['title']) || !isset($this->requestData['description']) || !isset($this->requestData['candidate_ids']) || !is_array($this->requestData['candidate_ids']) || empty($this->requestData['candidate_ids'])) {
+            if (!isset($this->requestData['title']) || !isset($this->requestData['description'])) {
                 $this->error('Missing or invalid data: title, description, and a non-empty array of candidate_ids are required.', 400);
                 $conn->rollback();
                 return;
@@ -75,7 +93,6 @@ class CampaignsController extends Controller
             $title = trim($this->requestData['title']);
             $description = trim($this->requestData['description']);
             $status = $this->requestData['status'] ?? 'draft'; // Default 'draft'
-            $candidateIds = array_map('intval', $this->requestData['candidate_ids']); // Ensure they are INT
 
             if (empty($title) || empty($description)) {
                 $this->error('Title and description cannot be empty.', 400);
@@ -83,43 +100,10 @@ class CampaignsController extends Controller
                 return;
             }
 
-            // 2. Verify that all candidates exist and belong to the current user's school (if not super admin)
-            $candidateSchoolIds = [];
-            $canManageAllUsers = $this->permissionChecker->userHasPermission($this->currentUserId, 'users.manage_all_users'); // To check if it's a Super Admin
-
-            foreach ($candidateIds as $candId) {
-                $stmt_check_candidate = $conn->prepare("SELECT school_id FROM candidates WHERE id = ? LIMIT 1;");
-                $stmt_check_candidate->bind_param('i', $candId);
-                $stmt_check_candidate->execute();
-                $stmt_check_candidate->bind_result($candSchoolId);
-                $stmt_check_candidate->fetch();
-                $stmt_check_candidate->close();
-
-                if ($candSchoolId === null) {
-                    $this->error("Candidate with ID {$candId} not found.", 404);
-                    $conn->rollback();
-                    return;
-                }
-                $candidateSchoolIds[] = $candSchoolId;
-
-                // If the user is not a Super Admin, all candidates must be from their school
-                if (!$canManageAllUsers && $this->currentUserSchoolId !== null && $candSchoolId !== $this->currentUserSchoolId) {
-                    $this->error("Access denied: You cannot create a campaign with candidates from another school.", 403);
-                    $conn->rollback();
-                    return;
-                }
-            }
-
-            // Determine the campaign's school_id (will be the school_id of the first candidate, or null if Super Admin and candidates from different schools)
-            // For simplicity, we assume all candidates in a campaign must be from the same school.
-            // If a Super Admin can create a campaign with candidates from different schools, the logic here should be more complex.
-            // For now, we will use the school_id of the first candidate as the campaign's school_id.
-            $campaignSchoolId = $candidateSchoolIds[0] ?? null;
-
 
             // 3. Insert the new campaign
             $stmt_insert_campaign = $conn->prepare("INSERT INTO campaigns (title, description, status, created_at, school_id) VALUES (?, ?, ?, NOW(), ?);");
-            $stmt_insert_campaign->bind_param('sssi', $title, $description, $status, $campaignSchoolId);
+            $stmt_insert_campaign->bind_param('sssi', $title, $description, $status, $this->currentUserSchoolId);
 
             if (!$stmt_insert_campaign->execute()) {
                 $this->error('Error creating campaign: ' . $conn->error, 500);
@@ -129,19 +113,6 @@ class CampaignsController extends Controller
             }
             $newCampaignId = $conn->insert_id;
             $stmt_insert_campaign->close();
-
-            // 4. Associate candidates with the campaign in the campaign_candidates table
-            $stmt_insert_cc = $conn->prepare("INSERT INTO campaign_candidates (campaign_id, candidate_id) VALUES (?, ?);");
-            foreach ($candidateIds as $candId) {
-                $stmt_insert_cc->bind_param('ii', $newCampaignId, $candId);
-                if (!$stmt_insert_cc->execute()) {
-                    $this->error('Error associating candidates with the campaign: ' . $conn->error, 500);
-                    $conn->rollback();
-                    $stmt_insert_cc->close();
-                    return;
-                }
-            }
-            $stmt_insert_cc->close();
 
             $conn->commit(); // Confirm the transaction
 
@@ -233,32 +204,41 @@ class CampaignsController extends Controller
         $campaigns = [];
 
         // Check permissions
-        $canViewAll = $this->permissionChecker->userHasPermission($this->currentUserId, 'campaigns.view_all');
-        $canViewOwnSchool = $this->permissionChecker->userHasPermission($this->currentUserId, 'campaigns.view_own_school');
-        $canViewOwnCandidate = $this->permissionChecker->userHasPermission($this->currentUserId, 'campaigns.view_own_candidate');
+        $canViewAll = $this->permissionChecker->userHasPermission($this->currentUserId, 'campaign.view_all');
+        $canViewOwnSchool = $this->permissionChecker->userHasPermission($this->currentUserId, 'campaign.view_own_school');
+        $canViewOwnCandidate = $this->permissionChecker->userHasPermission($this->currentUserId, 'campaign.view_own_candidate');
 
         if (!$canViewAll && !$canViewOwnSchool && !$canViewOwnCandidate) {
             $this->error('Access denied: Insufficient permissions to view campaigns.', 403);
             return;
         }
 
-        $sql = "SELECT c.id, c.title, c.description, c.status, c.created_at, c.school_id
-                FROM campaigns c";
+        // Base query with subqueries for counts
+        $sql = "SELECT 
+                c.id, 
+                c.title, 
+                c.description, 
+                c.status, 
+                c.created_at, 
+                c.school_id,
+                (SELECT COUNT(*) FROM campaign_candidates cc WHERE cc.campaign_id = c.id) AS candidates_count,
+                (SELECT COUNT(*) FROM campaign_materials cm WHERE cm.campaign_id = c.id) AS materials_count,
+                (SELECT COUNT(*) FROM campaign_events ce WHERE ce.campaign_id = c.id) AS events_count
+            FROM campaigns c";
+
         $params = [];
         $types = '';
         $whereClauses = [];
 
-        // Filter by candidate_id if provided in JSON (used by frontend)
+        // Filter by candidate_id if provided
         $requestedCandidateId = $this->requestData['candidate_id'] ?? null;
         if ($requestedCandidateId !== null) {
-            $requestedCandidateId = (int)$requestedCandidateId; // Cast to INT
+            $requestedCandidateId = (int)$requestedCandidateId;
 
-            // If the user can only view their own candidate campaigns, verify that the requested ID is theirs
-            // Note: $this->currentUserId is the logged-in user's ID, not the candidate's ID.
-            // We need to retrieve the user ID associated with the requestedCandidateId
+            // Check ownership for candidate
             $targetCandidateUserId = null;
             $stmt_candidate_user_id = $conn->prepare("SELECT user_id FROM candidates WHERE id = ? LIMIT 1;");
-            $stmt_candidate_user_id->bind_param('i', $requestedCandidateId); // Bind as INT
+            $stmt_candidate_user_id->bind_param('i', $requestedCandidateId);
             $stmt_candidate_user_id->execute();
             $stmt_candidate_user_id->bind_result($targetCandidateUserId);
             $stmt_candidate_user_id->fetch();
@@ -268,10 +248,10 @@ class CampaignsController extends Controller
                 $this->error('Access denied: You cannot view campaigns of other candidates.', 403);
                 return;
             }
-            // Verify that the candidate is from the same school if the user only has permissions for their own school
+
             if (!$canViewAll && $canViewOwnSchool && $this->currentUserSchoolId !== null) {
                 $stmt_check_candidate_school = $conn->prepare("SELECT school_id FROM candidates WHERE id = ? LIMIT 1;");
-                $stmt_check_candidate_school->bind_param('i', $requestedCandidateId); // Bind as INT
+                $stmt_check_candidate_school->bind_param('i', $requestedCandidateId);
                 $stmt_check_candidate_school->execute();
                 $stmt_check_candidate_school->bind_result($candSchoolId);
                 $stmt_check_candidate_school->fetch();
@@ -282,42 +262,37 @@ class CampaignsController extends Controller
                     return;
                 }
             }
-            // Add a JOIN with campaign_candidates to filter by candidate_id
+
             $sql .= " JOIN campaign_candidates cc ON c.id = cc.campaign_id";
             $whereClauses[] = "cc.candidate_id = ?";
             $params[] = $requestedCandidateId;
-            $types .= 'i'; // Bind as INT
+            $types .= 'i';
         } else {
-            // No specific candidate_id requested, apply filters based on user permissions
+            // Permissions filter
             if (!$canViewAll) {
                 if ($canViewOwnSchool && $this->currentUserSchoolId !== null) {
                     $whereClauses[] = "c.school_id = ?";
                     $params[] = $this->currentUserSchoolId;
                     $types .= 'i';
                 } elseif ($canViewOwnCandidate && $this->currentUserId !== null) {
-                    // If the user is a candidate and can only view their own campaigns
-                    // We need to find the candidate ID associated with this user_id
                     $stmt_get_candidate_id = $conn->prepare("SELECT id FROM candidates WHERE user_id = ? LIMIT 1;");
-                    $stmt_get_candidate_id->bind_param('i', $this->currentUserId); // Bind user_id as INT
+                    $stmt_get_candidate_id->bind_param('i', $this->currentUserId);
                     $stmt_get_candidate_id->execute();
                     $stmt_get_candidate_id->bind_result($ownCandidateId);
                     $stmt_get_candidate_id->fetch();
                     $stmt_get_candidate_id->close();
 
                     if ($ownCandidateId !== null) {
-                        // Add a JOIN with campaign_candidates to filter by the user's candidate
                         $sql .= " JOIN campaign_candidates cc ON c.id = cc.campaign_id";
                         $whereClauses[] = "cc.candidate_id = ?";
                         $params[] = $ownCandidateId;
-                        $types .= 'i'; // Bind candidate_id as INT
+                        $types .= 'i';
                     } else {
-                        // The user has 'view_own_candidate' permission but is not a candidate.
-                        $this->json([], 200); // Return an empty array
+                        $this->json([], 200);
                         return;
                     }
                 } else {
-                    // If no specific permissions and no candidate requested, cannot view anything
-                    $this->json([], 200); // Return an empty array
+                    $this->json([], 200);
                     return;
                 }
             }
@@ -327,7 +302,7 @@ class CampaignsController extends Controller
             $sql .= " WHERE " . implode(' AND ', $whereClauses);
         }
 
-        $sql .= " ORDER BY c.created_at DESC"; // Order by creation date
+        $sql .= " ORDER BY c.created_at DESC";
 
         $stmt = $conn->prepare($sql);
         if (!empty($params)) {
@@ -337,6 +312,7 @@ class CampaignsController extends Controller
             }
             call_user_func_array([$stmt, 'bind_param'], array_merge([$types], $refs));
         }
+
         $stmt->execute();
         $result = $stmt->get_result();
         while ($row = $result->fetch_assoc()) {
@@ -344,15 +320,10 @@ class CampaignsController extends Controller
         }
         $stmt->close();
 
-        // For each campaign, retrieve candidates, events, and materials
-        foreach ($campaigns as &$campaign) {
-            $campaign = array_merge($campaign, $this->getCampaignRelatedDetails($campaign['id']));
-        }
-        unset($campaign); // Break the reference to the last element
+        unset($campaign);
 
         $this->json($campaigns, 200);
     }
-
 
     /**
      * Modifies existing campaign data and its associated candidates.
@@ -409,9 +380,9 @@ class CampaignsController extends Controller
             $isOwnSchoolCampaign = ($this->currentUserSchoolId !== null && $this->currentUserSchoolId === $targetSchoolId);
 
             // 2. Authorization check
-            $canUpdateAll = $this->permissionChecker->userHasPermission($this->currentUserId, 'campaigns.update_all');
-            $canUpdateOwnSchool = $this->permissionChecker->userHasPermission($this->currentUserId, 'campaigns.update_own_school');
-            $canUpdateOwnCandidate = $this->permissionChecker->userHasPermission($this->currentUserId, 'campaigns.update_own_candidate');
+            $canUpdateAll = $this->permissionChecker->userHasPermission($this->currentUserId, 'campaign.update_all_school');
+            $canUpdateOwnSchool = $this->permissionChecker->userHasPermission($this->currentUserId, 'campaign.update_own_school');
+            $canUpdateOwnCandidate = $this->permissionChecker->userHasPermission($this->currentUserId, 'campaign.update_own_candidate');
 
             if (!$canUpdateAll && !($canUpdateOwnSchool && $isOwnSchoolCampaign) && !($canUpdateOwnCandidate && $isOwnCampaign)) {
                 $this->error('Access denied: Insufficient permissions to modify this campaign.', 403);
@@ -448,7 +419,7 @@ class CampaignsController extends Controller
             }
             if (isset($this->requestData['status'])) {
                 $status = trim($this->requestData['status']);
-                if (!in_array($status, ['draft', 'active', 'completed'])) {
+                if (!in_array($status, ['draft', 'activate'])) {
                     $this->error('Invalid campaign status.', 400);
                     $conn->rollback();
                     return;
@@ -602,9 +573,9 @@ class CampaignsController extends Controller
             $isOwnSchoolCampaign = ($this->currentUserSchoolId !== null && $this->currentUserSchoolId === $targetSchoolId);
 
             // 2. Authorization check
-            $canDeleteAll = $this->permissionChecker->userHasPermission($this->currentUserId, 'campaigns.delete_all');
-            $canDeleteOwnSchool = $this->permissionChecker->userHasPermission($this->currentUserId, 'campaigns.delete_own_school');
-            $canDeleteOwnCandidate = $this->permissionChecker->userHasPermission($this->currentUserId, 'campaigns.delete_own_candidate'); // Added for consistency, though less common
+            $canDeleteAll = $this->permissionChecker->userHasPermission($this->currentUserId, 'campaign.delete_all_school');
+            $canDeleteOwnSchool = $this->permissionChecker->userHasPermission($this->currentUserId, 'campaign.delete_own_school');
+            $canDeleteOwnCandidate = $this->permissionChecker->userHasPermission($this->currentUserId, 'campaign.delete_own_candidate'); // Added for consistency, though less common
 
             if (!$canDeleteAll && !($canDeleteOwnSchool && $isOwnSchoolCampaign) && !($canDeleteOwnCandidate && $isOwnCampaign)) {
                 $this->error('Access denied: Insufficient permissions to delete this campaign.', 403);
