@@ -657,7 +657,7 @@ class RoleController extends Controller
      */
     public function getRolesByLevelOrLower(): void
     {
-        if (!$this->permissionChecker->userHasPermission($this->currentUserId, 'roles.view_all')) {
+        if (!$this->permissionChecker->userHasPermission($this->currentUserId, 'roles.view_all') && !$this->permissionChecker->userHasPermission($this->currentUserId, 'users.register_new_users')) {
             $this->error('Accesso negato: Permessi insufficienti per visualizzare i ruoli.', 403);
             return;
         }

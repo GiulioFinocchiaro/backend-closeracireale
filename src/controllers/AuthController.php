@@ -27,193 +27,129 @@ class AuthController extends Controller {
 
     public function register(): void
     {
-        // Decodifica i dati JSON inviati nella richiesta
         $data = json_decode(file_get_contents("php://input"), true);
 
-        // 1. Validazione input iniziale: verifica la presenza di dati essenziali
-        if (!isset($data["email"]) || !isset($data["name"]) || !isset($data["role"])) {
+        if (!isset($data["email"], $data["name"], $data["role"])) {
             $this->error("Dati mancanti: email, nome o ruolo.", 400);
             return;
         }
 
-        // Normalizza i ruoli del nuovo utente in un array di ID interi.
-        // Gestisce sia un singolo ID che un array di ID.
-        $new_user_role_ids = [];
-        if (is_array($data["role"])) {
-            foreach ($data["role"] as $role_id) {
-                $new_user_role_ids[] = intval($role_id);
-            }
-        } else {
-            $new_user_role_ids[] = intval($data["role"]);
-        }
-
-        // Se l'array di ruoli è vuoto dopo la normalizzazione, restituisci un errore
+        $new_user_role_ids = is_array($data["role"]) ? array_map('intval', $data["role"]) : [intval($data["role"])];
         if (empty($new_user_role_ids)) {
             $this->error("Ruolo/i non valido/i specificato/i per il nuovo utente.", 400);
             return;
         }
 
-        // Autentica l'utente che sta effettuando la richiesta di registrazione
         $auth = new AuthMiddleware();
-        $registering_user_id = $auth->authenticate()->sub; // ID dell'utente autenticato
+        $registering_user_id = $auth->authenticate()->sub;
 
-        // Recupera i dettagli dell'utente che sta registrando (l'amministratore)
         $conn = Connection::get();
-        $stmt = $conn->prepare("SELECT email, name FROM users WHERE id = ?");
-        $stmt->bind_param("i", $registering_user_id);
-        $stmt->execute();
-        $result = $stmt->get_result();
-        $user = $result->fetch_assoc(); // Dettagli dell'utente che sta registrando
-        $stmt->close();
 
-        // Verifica il permesso generale per registrare nuovi utenti
+        // Verifica permesso generale
         $roleChecker = new RoleChecker();
-        $hasPermissionToRegister = $roleChecker->userHasPermission($registering_user_id, 'users.register_new_users');
-
-        if (!$hasPermissionToRegister) {
+        if (!$roleChecker->userHasPermission($registering_user_id, 'users.register_new_users')) {
             $this->error("Utente non autorizzato: non ha i permessi per registrare nuovi utenti.", 403);
             return;
         }
-
-        // 2. Recupera il livello di privilegio più alto dell'utente che sta registrando
         $registeringUserMaxPrivilege = null;
-        try {
-            $stmt = $conn->prepare("
-                SELECT MAX(r.level) AS max_privilege
-                FROM user_role ur
-                JOIN roles r ON ur.role_id = r.id
-                WHERE ur.user_id = ?;
-            ");
-            $stmt->bind_param("i", $registering_user_id);
-            $stmt->execute();
-            $result = $stmt->get_result();
-            $row = $result->fetch_assoc();
-            if ($row && $row['max_privilege'] !== null) {
-                $registeringUserMaxPrivilege = (int)$row['max_privilege'];
-            }
-            $stmt->close();
-        } catch (\Exception $e) {
-            $this->error("Errore durante il recupero dei privilegi dell'utente registratore: " . $e->getMessage(), 500);
-            return;
-        }
 
-        // Se non è stato possibile determinare il privilegio dell'utente registratore, nega l'accesso
+        // Livello massimo dell'utente registratore
+        $stmt = $conn->prepare("
+        SELECT MAX(r.level) AS max_privilege
+        FROM user_role ur
+        JOIN roles r ON ur.role_id = r.id
+        WHERE ur.user_id = ?;
+    ");
+        $stmt->bind_param("i", $registering_user_id);
+        $stmt->execute();
+        $stmt->bind_result($registeringUserMaxPrivilege);
+        $stmt->fetch();
+        $stmt->close();
+
         if ($registeringUserMaxPrivilege === null) {
-            $this->error("Impossibile determinare il livello di privilegio dell'utente registratore. Accesso negato.", 403);
+            $this->error("Impossibile determinare il livello di privilegio dell'utente registratore.", 403);
             return;
         }
 
-        // 3. Valida i ruoli del nuovo utente e recupera il loro livello di privilegio più alto
-        $newUsersRolesMaxPrivilege = 0; // Inizializza con un valore basso
-        try {
-            // Prepara i placeholder per la clausola IN
-            $placeholders = implode(',', array_fill(0, count($new_user_role_ids), '?'));
-            $types = str_repeat('i', count($new_user_role_ids)); // Tutti i parametri sono interi
+        // Recupera ruoli validi e massimo privilegio del nuovo utente
+        $placeholders = implode(',', array_fill(0, count($new_user_role_ids), '?'));
+        $types = str_repeat('i', count($new_user_role_ids));
+        $stmt = $conn->prepare("SELECT id, level FROM roles WHERE id IN ($placeholders)");
+        $stmt->bind_param($types, ...$new_user_role_ids);
+        $stmt->execute();
+        $result = $stmt->get_result();
 
-            $stmt = $conn->prepare("
-                SELECT id, level
-                FROM roles
-                WHERE id IN ($placeholders);
-            ");
-            // Utilizza l'operatore spread (...) per passare gli elementi dell'array come parametri
-            $stmt->bind_param($types, ...$new_user_role_ids);
-            $stmt->execute();
-            $result = $stmt->get_result();
+        $validRoleIds = [];
+        $newUsersRolesMaxPrivilege = 0;
+        while ($row = $result->fetch_assoc()) {
+            $validRoleIds[] = (int)$row['id'];
+            $newUsersRolesMaxPrivilege = max($newUsersRolesMaxPrivilege, (int)$row['level']);
+        }
+        $stmt->close();
 
-            $foundRoleIds = [];
-            while ($row = $result->fetch_assoc()) {
-                $foundRoleIds[] = (int)$row['id'];
-                // Trova il massimo livello di privilegio tra i ruoli richiesti
-                if ((int)$row['level'] > $newUsersRolesMaxPrivilege) {
-                    $newUsersRolesMaxPrivilege = (int)$row['level'];
-                }
-            }
-            $stmt->close();
-
-            // Verifica che tutti i ruoli richiesti siano stati trovati nel database
-            if (count(array_diff($new_user_role_ids, $foundRoleIds)) > 0) {
-                $this->error("Uno o più ruoli specificati per il nuovo utente non sono validi o non esistono.", 400);
-                return;
-            }
-            // A questo punto, $new_user_role_ids contiene solo ID di ruoli validi
-        } catch (\Exception $e) {
-            $this->error("Errore durante la validazione dei ruoli del nuovo utente: " . $e->getMessage(), 500);
+        if (count($validRoleIds) !== count($new_user_role_ids)) {
+            $this->error("Uno o più ruoli specificati non sono validi.", 400);
             return;
         }
 
-        // 4. Confronto dei privilegi: l'utente registratore deve avere privilegi sufficienti
         if ($newUsersRolesMaxPrivilege > $registeringUserMaxPrivilege) {
             $this->error("Non puoi assegnare un ruolo con un livello di privilegio superiore al tuo.", 403);
             return;
         }
 
-        // Estrazione dei dati per la registrazione del nuovo utente
         $email = $data["email"];
         $name = $data["name"];
-        $school = isset($data["school"]) ? $data["school"] : null;
+        $school = $data["school"] ?? null;
 
-        try {
-            // Verifica se l'email è già registrata
-            $stmt = $conn->prepare("SELECT id FROM users WHERE email = ?");
-            $stmt->bind_param("s", $email);
-            $stmt->execute();
-            $stmt->store_result();
-            if ($stmt->num_rows > 0) {
-                $this->error("E-mail già registrata.", 409);
-                return;
-            }
-            $stmt->close();
-
-            // Inserisce il nuovo utente nel database
-            $hased_password = password_hash($this->password_new_user_default, PASSWORD_BCRYPT);
-            $stmt = $conn->prepare("INSERT INTO users (email, password, name, school_id, created_by) VALUES (?, ?, ?, ?, ?)");
-            $stmt->bind_param("ssssi", $email, $hased_password, $name, $school, $registering_user_id);
-            $stmt->execute();
-            $new_user_id = $conn->insert_id; // Ottiene l'ID del nuovo utente inserito
-            $stmt->close();
-
-            // Inserisce i ruoli associati al nuovo utente nella tabella user_roles
-            $stmt = $conn->prepare("INSERT INTO user_role (user_id, role_id) VALUES (?, ?)");
-            foreach ($new_user_role_ids as $role_id) {
-                $stmt->bind_param("ii", $new_user_id, $role_id);
-                $stmt->execute();
-            }
-            $stmt->close();
-
-            // --- Invio email al nuovo utente ---
-            $password = $this->password_new_user_default; // La password temporanea
-            ob_start(); // Inizia il buffering dell'output
-            include __DIR__ . '/../../templates/email/email_register.php'; // Includi il template email
-            $html = ob_get_clean(); // Ottiene il contenuto del buffer
-
-            Mail::sendMail(
-                $email,
-                "Benvenuto su " . $_ENV["PLATFORM_NAME"],
-                $html,
-                "Il tuo account " . $_ENV["PLATFORM_NAME"] . " è pronto"
-            );
-
-            // --- Invio email di notifica all'amministratore ---
-            $admin_name = $user["name"]; // Nome dell'amministratore che ha registrato
-            ob_start(); // Inizia un nuovo buffering dell'output
-            include __DIR__ . '/../../templates/email/admin_user_registered.php'; // Includi il template email per l'admin
-            $html = ob_get_clean(); // Ottiene il contenuto del buffer
-
-            Mail::sendMail(
-                $user["email"], // Email dell'amministratore
-                "Hai registrato un nuovo utente",
-                $html,
-                "L'account di " . $name . " è pronto!" // $name è il nome del nuovo utente
-            );
-
-            // Risposta di successo
-            Response::json(["message" => "Registrazione completata"]);
-
-        } catch (\Exception $e) {
-            // Gestione degli errori generici durante la registrazione
-            // In un'applicazione reale, qui si potrebbe anche implementare un rollback della transazione
-            $this->error("Si è verificato un errore durante la registrazione: " . $e->getMessage(), 500);
+        // Verifica email duplicata
+        $stmt = $conn->prepare("SELECT id FROM users WHERE email = ?");
+        $stmt->bind_param("s", $email);
+        $stmt->execute();
+        $stmt->store_result();
+        if ($stmt->num_rows > 0) {
+            $this->error("E-mail già registrata.", 409);
+            return;
         }
+        $stmt->close();
+
+        // Inserisci nuovo utente
+        $hashed_password = password_hash($this->password_new_user_default, PASSWORD_BCRYPT);
+        $stmt = $conn->prepare("INSERT INTO users (email, password, name, school_id, created_by) VALUES (?, ?, ?, ?, ?)");
+        $stmt->bind_param("ssssi", $email, $hashed_password, $name, $school, $registering_user_id);
+        if (!$stmt->execute()) {
+            $this->error("Errore durante l'inserimento dell'utente: " . $conn->error, 500);
+            return;
+        }
+        $new_user_id = $conn->insert_id;
+        $stmt->close();
+
+        // Inserisci ruoli senza duplicati
+        $stmt = $conn->prepare("INSERT INTO user_role (user_id, role_id) VALUES (?, ?)");
+        foreach ($validRoleIds as $role_id) {
+            $stmt->bind_param("ii", $new_user_id, $role_id);
+            $stmt->execute();
+        }
+        $stmt->close();
+
+        // Invia email al nuovo utente
+        ob_start();
+        include __DIR__ . '/../../templates/email/email_register.php';
+        $html = ob_get_clean();
+        Mail::sendMail($email, "Benvenuto su " . $_ENV["PLATFORM_NAME"], $html, "Il tuo account " . $_ENV["PLATFORM_NAME"] . " è pronto");
+
+        // Notifica all'amministratore
+        $stmt = $conn->prepare("SELECT name, email FROM users WHERE id = ?");
+        $stmt->bind_param("i", $registering_user_id);
+        $stmt->execute();
+        $admin = $stmt->get_result()->fetch_assoc();
+        $stmt->close();
+
+        ob_start();
+        include __DIR__ . '/../../templates/email/admin_user_registered.php';
+        $html = ob_get_clean();
+        Mail::sendMail($admin['email'], "Hai registrato un nuovo utente", $html, "L'account di $name è pronto!");
+
+        Response::json(["success" => true, "message" => "Registrazione completata", "user_id" => $new_user_id]);
     }
 
     public function login(): void
@@ -283,12 +219,70 @@ class AuthController extends Controller {
         $user_id = $auth->authenticate()->sub;
 
         $conn = Connection::get();
-        $stmt = $conn->prepare("SELECT * FROM users WHERE id = ?");
+        $stmt = $conn->prepare("
+        SELECT 
+            u.id AS user_id,
+            u.name AS user_name,
+            u.email AS user_email,
+            r.id AS role_id,
+            r.name AS role_name,
+            r.level AS role_level,
+            r.color AS role_color,
+            r.school_id AS role_school_id,
+            p.id AS permission_id,
+            p.name AS permission_name,
+            p.display_name AS permission_display_name
+        FROM users u
+        LEFT JOIN user_role ur ON u.id = ur.user_id
+        LEFT JOIN roles r ON ur.role_id = r.id
+        LEFT JOIN role_permissions rp ON r.id = rp.role_id
+        LEFT JOIN permissions p ON rp.permission_id = p.id
+        WHERE u.id = ?
+        ORDER BY r.level DESC;
+    ");
         $stmt->bind_param("i", $user_id);
         $stmt->execute();
-
         $result = $stmt->get_result();
-        $user = $result->fetch_assoc();
+
+        $user = null;
+        $roles = [];
+
+        while ($row = $result->fetch_assoc()) {
+            if ($user === null) {
+                $user = [
+                    "id" => $row["user_id"],
+                    "name" => $row["user_name"],
+                    "email" => $row["user_email"],
+                    "roles" => []
+                ];
+            }
+
+            if ($row["role_id"]) {
+                if (!isset($roles[$row["role_id"]])) {
+                    $roles[$row["role_id"]] = [
+                        "id" => $row["role_id"],
+                        "name" => $row["role_name"],
+                        "level" => $row["role_level"],
+                        "color" => $row["role_color"],
+                        "school_id" => $row["role_school_id"],
+                        "permissions" => []
+                    ];
+                }
+
+                if ($row["permission_id"]) {
+                    $roles[$row["role_id"]]["permissions"][] = [
+                        "id" => $row["permission_id"],
+                        "name" => $row["permission_name"],
+                        "display_name" => $row["permission_display_name"]
+                    ];
+                }
+            }
+        }
+
+        if ($user !== null) {
+            $user["roles"] = array_values($roles);
+        }
+
         $this->json($user);
     }
 }

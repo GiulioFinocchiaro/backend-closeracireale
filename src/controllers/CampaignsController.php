@@ -156,7 +156,7 @@ class CampaignsController extends Controller
         $campaign = $this->getCampaignDetailsById($campaignId);
 
         if ($campaign === null) {
-            $this->error('Campaign not found.', 404);
+                $this->error('Campaign not found.', 404);
             return;
         }
 
@@ -175,9 +175,9 @@ class CampaignsController extends Controller
         $isOwnCampaign = ($this->currentUserId !== null && in_array($this->currentUserId, $associatedCandidateUserIds));
         $isOwnSchoolCampaign = ($this->currentUserSchoolId !== null && $this->currentUserSchoolId === $campaign['school_id']);
 
-        $canViewAll = $this->permissionChecker->userHasPermission($this->currentUserId, 'campaigns.view_all');
-        $canViewOwnSchool = $this->permissionChecker->userHasPermission($this->currentUserId, 'campaigns.view_own_school');
-        $canViewOwnCandidate = $this->permissionChecker->userHasPermission($this->currentUserId, 'campaigns.view_own_candidate');
+        $canViewAll = $this->permissionChecker->userHasPermission($this->currentUserId, 'campaign.view_all');
+        $canViewOwnSchool = $this->permissionChecker->userHasPermission($this->currentUserId, 'campaign.view_own_school');
+        $canViewOwnCandidate = $this->permissionChecker->userHasPermission($this->currentUserId, 'campaign.view_own_candidate');
 
 
         if (!$canViewAll && !($canViewOwnSchool && $isOwnSchoolCampaign) && !($canViewOwnCandidate && $isOwnCampaign)) {
@@ -657,7 +657,21 @@ class CampaignsController extends Controller
 
         // Retrieve materials associated with the campaign
         $campaign['materials'] = [];
-        $stmt_materials = $conn->prepare("SELECT id, material_name, material_type, file_url, description, created_at FROM campaign_materials WHERE campaign_id = ? ORDER BY created_at ASC;");
+        $stmt_materials = $conn->prepare("
+        SELECT 
+            cm.id AS material_id,
+            cm.material_name,
+            cm.graphic_id,
+            cm.created_at AS material_created_at,
+            cm.created_by,
+            cm.published_at,
+            ga.* 
+        FROM campaign_materials cm
+        LEFT JOIN graphic_assets ga
+            ON cm.graphic_id = ga.id
+        WHERE cm.campaign_id = ?
+        ORDER BY cm.published_at ASC
+        ");
         $stmt_materials->bind_param('i', $campaignId);
         $stmt_materials->execute();
         $materials_result = $stmt_materials->get_result();
@@ -668,4 +682,5 @@ class CampaignsController extends Controller
 
         return $campaign;
     }
+
 }

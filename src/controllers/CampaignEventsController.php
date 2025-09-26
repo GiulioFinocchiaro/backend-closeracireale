@@ -14,6 +14,8 @@ class CampaignEventsController extends Controller
     private ?int $currentUserId = null;
     private ?int $currentUserSchoolId = null;
     private array $requestData;
+    private bool $canViewAll;
+    private bool $canViewOwn;
 
     public function __construct()
     {
@@ -32,12 +34,26 @@ class CampaignEventsController extends Controller
             $decodedToken = $this->authMiddleware->authenticate();
             $this->currentUserId = $decodedToken->sub;
 
-            $stmt = $dbConnection->prepare("SELECT school_id FROM users WHERE id = ? LIMIT 1;");
-            $stmt->bind_param('i', $this->currentUserId);
-            $stmt->execute();
-            $stmt->bind_result($this->currentUserSchoolId);
-            $stmt->fetch();
-            $stmt->close();
+            $this->canViewAll = $this->permissionChecker->userHasPermission($this->currentUserId, "campaign.view_all");
+            $this->canViewOwn = $this->permissionChecker->userHasPermission($this->currentUserId, "campaign.view_own_school");
+
+            if ($this->canViewAll) {
+                $schoolId = $_POST["school_id"] ?? $this->requestData["school_id"] ?? null;
+                if ($schoolId === null) {
+                    echo $schoolId;
+                    $this->error("`school_id` obbligatorio per visualizzare asset di un'altra scuola.", 400);
+                    return;
+                }
+                $this->currentUserSchoolId = (int) $schoolId;
+            } elseif ($this->canViewOwn) {
+                if (isset($this->requestData["school_id"]) && (int)$this->requestData["school_id"] !== $this->currentUserSchoolId) {
+                    $this->error("Non hai i permessi per accedere agli asset di un'altra scuola.", 403);
+                    return;
+                }
+            } else {
+                $this->error("Accesso negato: permessi insufficienti.", 403);
+                return;
+            }
 
         } catch (\Exception $e) {
             $this->error('Authentication failed: ' . $e->getMessage(), 401);
@@ -54,7 +70,7 @@ class CampaignEventsController extends Controller
      */
     public function addCampaignEvent(): void
     {
-        if (!$this->permissionChecker->userHasPermission($this->currentUserId, 'campaign_events.create')) {
+        if (!$this->permissionChecker->userHasPermission($this->currentUserId, 'campaign_events.create_all')) {
             $this->error('Access denied: Insufficient permissions to add events.', 403);
             return;
         }

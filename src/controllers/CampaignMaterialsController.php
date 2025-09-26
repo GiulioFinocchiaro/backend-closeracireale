@@ -14,6 +14,8 @@ class CampaignMaterialsController extends Controller
     private ?int $currentUserId = null;
     private ?int $currentUserSchoolId = null;
     private array $requestData;
+    private bool $canViewAll;
+    private bool $canViewOwn;
 
     public function __construct()
     {
@@ -32,12 +34,29 @@ class CampaignMaterialsController extends Controller
             $decodedToken = $this->authMiddleware->authenticate();
             $this->currentUserId = $decodedToken->sub;
 
-            $stmt = $dbConnection->prepare("SELECT school_id FROM users WHERE id = ? LIMIT 1;");
-            $stmt->bind_param('i', $this->currentUserId);
-            $stmt->execute();
-            $stmt->bind_result($this->currentUserSchoolId);
-            $stmt->fetch();
-            $stmt->close();
+            // ===============================
+            // LOGICA PER PERMESSI E SCHOOL_ID
+            // ===============================
+            $this->canViewAll = $this->permissionChecker->userHasPermission($this->currentUserId, "campaign.view_all");
+            $this->canViewOwn = $this->permissionChecker->userHasPermission($this->currentUserId, "campaign.view_own_school");
+
+            if ($this->canViewAll) {
+                $schoolId = $_POST["school_id"] ?? $this->requestData["school_id"] ?? null;
+                if ($schoolId === null) {
+                    echo $schoolId;
+                    $this->error("`school_id` obbligatorio per visualizzare asset di un'altra scuola.", 400);
+                    return;
+                }
+                $this->currentUserSchoolId = (int) $schoolId;
+            } elseif ($this->canViewOwn) {
+                if (isset($this->requestData["school_id"]) && (int)$this->requestData["school_id"] !== $this->currentUserSchoolId) {
+                    $this->error("Non hai i permessi per accedere agli asset di un'altra scuola.", 403);
+                    return;
+                }
+            } else {
+                $this->error("Accesso negato: permessi insufficienti.", 403);
+                return;
+            }
 
         } catch (\Exception $e) {
             $this->error('Authentication failed: ' . $e->getMessage(), 401);
@@ -54,23 +73,17 @@ class CampaignMaterialsController extends Controller
      */
     public function addCampaignMaterial(): void
     {
-        if (!$this->permissionChecker->userHasPermission($this->currentUserId, 'campaign_materials.create')) {
-            $this->error('Access denied: Insufficient permissions to add materials.', 403);
-            return;
-        }
-
         $conn = Connection::get();
 
-        if (!isset($this->requestData['campaign_id']) || !isset($this->requestData['material_name']) || !isset($this->requestData['material_type']) || !isset($this->requestData['file_url'])) {
-            $this->error('Missing material data: campaign_id, material_name, material_type, and file_url are required.', 400);
+        if (!isset($this->requestData['campaign_id']) || !isset($this->requestData['material_name']) || !isset($this->requestData['graphic_id']) || !isset($this->requestData["published_at"])) {
+            $this->error('Missing material data: campaign_id, material_name, published_at and graphic_id are required.', 400);
             return;
         }
 
         $campaignId = (int)$this->requestData['campaign_id'];
         $materialName = trim($this->requestData['material_name']);
-        $materialType = trim($this->requestData['material_type']);
-        $fileUrl = trim($this->requestData['file_url']);
-        $description = trim($this->requestData['description'] ?? '');
+        $graphic_id = trim($this->requestData['graphic_id']);
+        $published_at = trim($this->requestData['published_at']);
 
         // Verify that the campaign exists and that the user has permissions to add materials to it
         $targetSchoolId = null;
@@ -110,8 +123,8 @@ class CampaignMaterialsController extends Controller
             return;
         }
 
-        $stmt_insert = $conn->prepare("INSERT INTO campaign_materials (campaign_id, material_name, material_type, file_url, description, created_at) VALUES (?, ?, ?, ?, ?, NOW());");
-        $stmt_insert->bind_param('issss', $campaignId, $materialName, $materialType, $fileUrl, $description);
+        $stmt_insert = $conn->prepare("INSERT INTO campaign_materials (campaign_id, material_name, published_at, graphic_id, created_at, created_by) VALUES (?, ?, ?, ?, NOW(), ?);");
+        $stmt_insert->bind_param('issii', $campaignId, $materialName, $published_at, $graphic_id, $this->currentUserId);
 
         if (!$stmt_insert->execute()) {
             $this->error('Error adding material: ' . $conn->error, 500);
@@ -375,5 +388,32 @@ class CampaignMaterialsController extends Controller
         $stmt->close();
 
         $this->json($materials, 200);
+    }
+
+    public function getMediaToInsertInCampaignMaterials() {
+        $canCreate = $this->permissionChecker->userHasPermission($this->currentUserId, 'campaign_materials.create_all');
+        $canUpdate = $this->permissionChecker->userHasPermission($this->currentUserId, 'campaign_materials.update_all');
+
+        $conn = Connection::get();
+        if (!$canCreate && !$canUpdate) {
+            $this->error('Access denied: Insufficient permissions', 403);
+            $conn->rollback();
+            return;
+        }
+
+
+        $stmt = $conn->prepare("SELECT * FROM graphic_assets WHERE school_id = ?");
+        $stmt->bind_param('i', $this->currentUserSchoolId);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $media = [];
+        while ($row = $result->fetch_assoc()) {
+            $media[] = $row;
+        }
+
+        $stmt->close();
+        $conn->close();
+
+        $this->json($media);
     }
 }

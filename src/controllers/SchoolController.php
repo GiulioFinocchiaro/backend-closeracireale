@@ -355,36 +355,181 @@ class SchoolController extends Controller
     public function getAllSchools(): void
     {
         $conn = Connection::get();
-        $schools = [];
 
-        // Verifica il permesso per visualizzare tutte le scuole
-        $canViewAllSchools = $this->permissionChecker->userHasPermission($this->currentUserId, 'schools.view_all');
+        // Verifica i permessi
+        $canViewAllSchools = $this->permissionChecker->userHasPermission(
+            $this->currentUserId,
+            'schools.view_all'
+        );
 
         if (!$canViewAllSchools) {
             $this->error('Accesso negato: Permessi insufficienti per visualizzare le scuole.', 403);
             return;
         }
 
-        // Aggiunto display_name alla SELECT
-        $sql = "SELECT id, school_name, list_name, created_at FROM schools";
-        $params = [];
-        $types = '';
+        $data = [];
 
-        $stmt = $conn->prepare($sql);
-        if (!empty($params)) {
-            $refs = [];
-            foreach ($params as $key => $value) {
-                $refs[$key] = &$params[$key];
-            }
-            call_user_func_array([$stmt, 'bind_param'], array_merge([$types], $refs));
+        // Totali generali
+        $sql1 = "
+        SELECT 
+            (SELECT COUNT(*) FROM candidates) AS total_candidates,
+            (SELECT COUNT(*) FROM campaigns WHERE status = 'activate') AS total_active_campaigns,
+            (SELECT COUNT(*) FROM campaign_materials) AS total_materials
+    ";
+        $res1 = $conn->query($sql1);
+        $data['totals'] = $res1->fetch_assoc();
+
+        // Tutte le scuole
+        $sqlSchools = "SELECT id, school_name, list_name FROM schools";
+        $resSchools = $conn->query($sqlSchools);
+        $schools = [];
+        while ($row = $resSchools->fetch_assoc()) {
+            $schools[$row['id']] = $row;
+            $schools[$row['id']]['candidates_per_school'] = 0;  // inizializza
+            $schools[$row['id']]['active_campaigns_per_school'] = 0;  // inizializza
         }
+
+        // Candidati per scuola
+        $sql2 = "
+        SELECT school_id, COUNT(*) AS candidates_per_school
+        FROM candidates
+        GROUP BY school_id
+    ";
+        $res2 = $conn->query($sql2);
+        while ($row = $res2->fetch_assoc()) {
+            $schoolId = $row['school_id'];
+            if (isset($schools[$schoolId])) {
+                $schools[$schoolId]['candidates_per_school'] = $row['candidates_per_school'];
+            }
+        }
+
+        // Campagne attive per scuola
+        $sql3 = "
+        SELECT school_id, COUNT(*) AS active_campaigns_per_school
+        FROM campaigns
+        WHERE status = 'activate'
+        GROUP BY school_id
+    ";
+        $res3 = $conn->query($sql3);
+        while ($row = $res3->fetch_assoc()) {
+            $schoolId = $row['school_id'];
+            if (isset($schools[$schoolId])) {
+                $schools[$schoolId]['active_campaigns_per_school'] = $row['active_campaigns_per_school'];
+            }
+        }
+
+        // Convertiamo in array indicizzato
+        $data['schools'] = array_values($schools);
+
+        $this->json($data, 200);
+    }
+
+    public function getSchoolDashboard(): void
+    {
+        $conn = Connection::get();
+
+        $userId = $this->currentUserId;
+        $userSchoolId = $this->currentUserSchoolId;
+
+        // Controlla permessi
+        $canViewAll = $this->permissionChecker->userHasPermission($userId, 'schools.view_all');
+        $canViewOwn = $this->permissionChecker->userHasPermission($userId, 'schools.view_own');
+
+        // Determina quale scuola visualizzare
+        if ($canViewAll && isset($_GET['school_id'])) {
+            $schoolIdToView = intval($_GET['school_id']);
+        } elseif ($canViewOwn && $userSchoolId !== null) {
+            $schoolIdToView = $userSchoolId;
+        } else {
+            $this->error('Accesso negato: permessi insufficienti.', 403);
+            return;
+        }
+
+        // Recupera la scuola
+        $stmt = $conn->prepare("SELECT id, school_name, list_name, created_at FROM schools WHERE id = ? LIMIT 1;");
+        $stmt->bind_param('i', $schoolIdToView);
         $stmt->execute();
         $result = $stmt->get_result();
-        while ($row = $result->fetch_assoc()) {
-            $schools[] = $row;
+        $schoolData = $result->fetch_assoc();
+        $stmt->close();
+
+        if (!$schoolData) {
+            $this->error('Scuola non trovata.', 404);
+            return;
+        }
+
+        $school = [
+            'school' => $schoolData
+        ];
+
+        // Numero di candidati della scuola
+        $stmt = $conn->prepare("SELECT COUNT(*) as total_candidates FROM candidates WHERE school_id = ?");
+        $stmt->bind_param('i', $schoolIdToView);
+        $stmt->execute();
+        $school['total_candidates'] = $stmt->get_result()->fetch_assoc()['total_candidates'] ?? 0;
+        $stmt->close();
+
+        // Numero di campagne attive
+        $stmt = $conn->prepare("SELECT COUNT(*) as active_campaigns FROM campaigns WHERE school_id = ? AND status = 'activate'");
+        $stmt->bind_param('i', $schoolIdToView);
+        $stmt->execute();
+        $school['active_campaigns'] = $stmt->get_result()->fetch_assoc()['active_campaigns'] ?? 0;
+        $stmt->close();
+
+        // Numero di utenti associati alla scuola
+        $stmt = $conn->prepare("SELECT COUNT(*) as total_users FROM users WHERE school_id = ?");
+        $stmt->bind_param('i', $schoolIdToView);
+        $stmt->execute();
+        $school['total_users'] = $stmt->get_result()->fetch_assoc()['total_users'] ?? 0;
+        $stmt->close();
+
+        // Numero totale di materiali delle campagne attive
+        $stmt = $conn->prepare("
+        SELECT COUNT(m.id) as total_materials 
+        FROM campaign_materials m
+        INNER JOIN campaigns c ON m.campaign_id = c.id
+        WHERE c.school_id = ? AND c.status = 'activate'
+    ");
+        $stmt->bind_param('i', $schoolIdToView);
+        $stmt->execute();
+        $school['total_materials'] = $stmt->get_result()->fetch_assoc()['total_materials'] ?? 0;
+        $stmt->close();
+
+        // Ultimi 5 materiali delle campagne attive
+        $stmt = $conn->prepare("
+    SELECT 
+        m.id AS material_id, 
+        m.material_name, 
+        m.published_at, 
+        c.title AS campaign_name, 
+        g.id AS graphic_id, 
+        g.file_name, 
+        g.file_path, 
+        g.file_type, 
+        g.asset_type, 
+        g.description, 
+        g.uploaded_by_user_id
+    FROM campaign_materials m
+    INNER JOIN campaigns c 
+        ON m.campaign_id = c.id
+    LEFT JOIN graphic_assets g 
+        ON g.id = m.graphic_id
+    WHERE c.school_id = ?
+      AND c.status = 'activate'
+    ORDER BY m.created_at DESC
+    LIMIT 5;
+");
+        $stmt->bind_param('i', $schoolIdToView);
+        $stmt->execute();
+        $materialsResult = $stmt->get_result();
+
+        $school['latest_materials'] = [];
+        while ($material = $materialsResult->fetch_assoc()) {
+            $school['latest_materials'][] = $material;
         }
         $stmt->close();
 
-        $this->json($schools, 200);
+        // Restituisci tutto
+        $this->json($school, 200);
     }
 }

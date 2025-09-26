@@ -68,9 +68,9 @@ class UserController extends Controller // Estendi la classe Controller
      *
      * @return void
      */
-    public function updateUser(): void // Rimosso $userIdToModify dal parametro
+    public function updateUser(): void
     {
-        // Recupera l'ID dell'utente da modificare dal corpo JSON
+        error_log("Role update data: " . json_encode($this->requestData['roles']));
         $userIdToModify = $this->requestData['id'] ?? null;
         if ($userIdToModify === null) {
             $this->error('ID utente da modificare mancante nella richiesta.', 400);
@@ -79,109 +79,104 @@ class UserController extends Controller // Estendi la classe Controller
 
         $conn = Connection::get();
 
-        // Recupera i dettagli dell'utente target (nome, email) e dell'amministratore che effettua la modifica (nome)
-        $targetUserName = '';
-        $targetUserEmail = '';
-        $stmt_get_target_user_details = $conn->prepare("SELECT name, email, school_id FROM users WHERE id = ? LIMIT 1;");
-        $stmt_get_target_user_details->bind_param('i', $userIdToModify);
-        $stmt_get_target_user_details->execute();
-        $stmt_get_target_user_details->bind_result($targetUserName, $targetUserEmail, $targetUserSchoolId);
-        $stmt_get_target_user_details->fetch();
-        $stmt_get_target_user_details->close();
+        // Recupera info utente target
+        $targetUserName = $targetUserEmail = null;
+        $targetUserSchoolId = null;
+        $stmt = $conn->prepare("SELECT name, email, school_id FROM users WHERE id = ? LIMIT 1;");
+        $stmt->bind_param('i', $userIdToModify);
+        $stmt->execute();
+        $stmt->bind_result($targetUserName, $targetUserEmail, $targetUserSchoolId);
+        $stmt->fetch();
+        $stmt->close();
 
-        if ($targetUserName === null) { // L'utente target non esiste
+        if ($targetUserName === null) {
             $this->error('Utente da modificare non trovato.', 404);
             return;
         }
 
+        // Recupera nome admin
         $updaterAdminName = '';
-        $stmt_get_updater_admin_name = $conn->prepare("SELECT name FROM users WHERE id = ? LIMIT 1;");
-        $stmt_get_updater_admin_name->bind_param('i', $this->currentUserId);
-        $stmt_get_updater_admin_name->execute();
-        $stmt_get_updater_admin_name->bind_result($updaterAdminName);
-        $stmt_get_updater_admin_name->fetch();
-        $stmt_get_updater_admin_name->close();
+        $stmt = $conn->prepare("SELECT name FROM users WHERE id = ? LIMIT 1;");
+        $stmt->bind_param('i', $this->currentUserId);
+        $stmt->execute();
+        $stmt->bind_result($updaterAdminName);
+        $stmt->fetch();
+        $stmt->close();
 
-
-        // 2. Verifica Autorizzazione
-        // Super Admin può fare tutto
+        // Permessi
         $canManageAllUsers = $this->permissionChecker->userHasPermission($this->currentUserId, 'users.edit.all');
-
-        // Admin può gestire utenti nella propria sezione
         $canManageOwnSectionUsers = $this->permissionChecker->userHasPermission($this->currentUserId, 'users.edit.own_section');
         $isOwnSectionUser = ($this->currentUserSchoolId !== null && $this->currentUserSchoolId === $targetUserSchoolId);
 
-        // L'utente corrente può modificare l'utente target se:
-        // A) È un Super Admin (ha manage_all_users)
-        // B) È un Admin (ha manage_own_section_users) E l'utente target è nella sua stessa sezione
         if (!$canManageAllUsers && (!$canManageOwnSectionUsers || !$isOwnSectionUser)) {
-            $this->error('Accesso negato: Permessi insufficienti per modificare questo utente o utente non nella tua sezione.', 403);
+            $this->error('Accesso negato: Permessi insufficienti.', 403);
             return;
         }
 
-        // 3. Recupera e valida i dati per la modifica (da $this->requestData)
+        // Campi aggiornabili
         $updateFields = [];
         $bindParams = [];
         $types = '';
-        $roleToAssign = null; // Per la gestione dei ruoli
-        $passwordUpdated = false; // Flag per l'invio dell'email
+        $passwordUpdated = false;
+        $rolesUpdated = false;
 
-        if (isset($this->requestData['name'])) {
+        if (!empty($this->requestData['name'])) {
             $updateFields[] = "name = ?";
             $bindParams[] = trim($this->requestData['name']);
             $types .= 's';
         }
-        if (isset($this->requestData['email'])) {
+
+        if (!empty($this->requestData['email'])) {
             if (!filter_var($this->requestData['email'], FILTER_VALIDATE_EMAIL)) {
                 $this->error('Formato email non valido.', 400);
                 return;
             }
-            // Verifica unicità email se modificata
-            $stmt_check_email = $conn->prepare("SELECT id FROM users WHERE email = ? AND id != ? LIMIT 1;");
-            $stmt_check_email->bind_param('si', $this->requestData['email'], $userIdToModify);
-            $stmt_check_email->execute();
-            $stmt_check_email->store_result();
-            if ($stmt_check_email->num_rows > 0) {
-                $stmt_check_email->close();
-                $this->error('La nuova email è già registrata per un altro utente.', 409);
+
+            // Unicità email
+            $stmt = $conn->prepare("SELECT id FROM users WHERE email = ? AND id != ? LIMIT 1;");
+            $stmt->bind_param('si', $this->requestData['email'], $userIdToModify);
+            $stmt->execute();
+            $stmt->store_result();
+            if ($stmt->num_rows > 0) {
+                $stmt->close();
+                $this->error('Email già in uso.', 409);
                 return;
             }
-            $stmt_check_email->close();
+            $stmt->close();
 
             $updateFields[] = "email = ?";
             $bindParams[] = trim($this->requestData['email']);
             $types .= 's';
         }
-        if (isset($this->requestData['password'])) {
-            if ($this->requestData['password']){
-                $updateFields[] = "password_hash = ?";
-                $bindParams[] = password_hash($_ENV["PASSWORD_NEW_USER_DEFAULT"], PASSWORD_BCRYPT);
-                $types .= 's';
-                $passwordUpdated = true; // Imposta il flag
-            }
+
+        if (!empty($this->requestData['password'])) {
+            $updateFields[] = "password_hash = ?";
+            $bindParams[] = password_hash($_ENV["PASSWORD_NEW_USER_DEFAULT"], PASSWORD_BCRYPT);
+            $types .= 's';
+            $passwordUpdated = true;
         }
-        if (isset($this->requestData['school_id'])) { // Permetti anche la modifica della school_id, se necessario
-            // Solo Super Admin può modificare la school_id di altri utenti
+
+        if (!empty($this->requestData['school_id'])) {
             if (!$canManageAllUsers) {
-                $this->error('Accesso negato: Non hai i permessi per modificare l\'ID della scuola.', 403);
+                $this->error('Non puoi modificare la scuola.', 403);
                 return;
             }
             $updateFields[] = "school_id = ?";
-            $bindParams[] = $this->requestData['school_id'];
+            $bindParams[] = intval($this->requestData['school_id']);
             $types .= 'i';
         }
 
-        if (isset($this->requestData['role']) && is_array($this->requestData['role'])) {
+        // Gestione ruoli
+        if (!empty($this->requestData['role']) && is_array($this->requestData['role'])) {
             $roleIdsToAssign = $this->requestData['role'];
             $canAssignRoles = $this->permissionChecker->userHasPermission($this->currentUserId, 'users.assign_roles');
             $canElevatePrivileges = $this->permissionChecker->userHasPermission($this->currentUserId, 'users.elevate_privileges');
 
             if (!$canAssignRoles) {
-                $this->error('Accesso negato: Permessi insufficienti per assegnare ruoli.', 403);
+                $this->error('Permessi insufficienti per assegnare ruoli.', 403);
                 return;
             }
 
-            // Prendi i livelli dei ruoli da assegnare
             $placeholders = implode(',', array_fill(0, count($roleIdsToAssign), '?'));
             $roleTypes = str_repeat('i', count($roleIdsToAssign));
             $stmt = $conn->prepare("SELECT id, level FROM roles WHERE id IN ($placeholders)");
@@ -189,14 +184,11 @@ class UserController extends Controller // Estendi la classe Controller
             $stmt->execute();
             $result = $stmt->get_result();
 
-            $validRoles = [];
-            while ($row = $result->fetch_assoc()) {
-                $validRoles[] = $row;
-            }
+            $validRoles = $result->fetch_all(MYSQLI_ASSOC);
             $stmt->close();
 
             if (count($validRoles) !== count($roleIdsToAssign)) {
-                $this->error('Uno o più ruoli specificati non sono validi.', 400);
+                $this->error('Ruoli non validi.', 400);
                 return;
             }
 
@@ -206,115 +198,66 @@ class UserController extends Controller // Estendi la classe Controller
             if (!$canElevatePrivileges) {
                 foreach ($validRoles as $role) {
                     if ($role['level'] > $currentUserMaxRoleLevel) {
-                        $this->error('Accesso negato: Non puoi assegnare un ruolo con privilegi superiori ai tuoi.', 403);
+                        $this->error('Non puoi assegnare ruoli superiori ai tuoi.', 403);
                         return;
                     }
                 }
                 if ($targetUserMaxRoleLevel > $currentUserMaxRoleLevel) {
-                    $this->error('Accesso negato: Non puoi modificare il ruolo di un utente con privilegi superiori ai tuoi.', 403);
+                    $this->error('Non puoi modificare un utente con privilegi superiori ai tuoi.', 403);
                     return;
                 }
             }
 
             $conn->begin_transaction();
             try {
-                // Elimina ruoli precedenti
-                $stmt_delete_roles = $conn->prepare("DELETE FROM user_role WHERE user_id = ?");
-                $stmt_delete_roles->bind_param('i', $userIdToModify);
-                $stmt_delete_roles->execute();
-                $stmt_delete_roles->close();
+                $stmt = $conn->prepare("DELETE FROM user_role WHERE user_id = ?");
+                $stmt->bind_param('i', $userIdToModify);
+                $stmt->execute();
+                $stmt->close();
 
-                // Assegna i nuovi ruoli
-                $stmt_add_role = $conn->prepare("INSERT INTO user_role (user_id, role_id) VALUES (?, ?)");
+                $stmt = $conn->prepare("INSERT INTO user_role (user_id, role_id) VALUES (?, ?)");
                 foreach ($validRoles as $role) {
-                    $stmt_add_role->bind_param('ii', $userIdToModify, $role['id']);
-                    $stmt_add_role->execute();
+                    $stmt->bind_param('ii', $userIdToModify, $role['id']);
+                    $stmt->execute();
                 }
-                $stmt_add_role->close();
+                $stmt->close();
 
                 $conn->commit();
+                $rolesUpdated = true;
             } catch (\Exception $e) {
                 $conn->rollback();
-                error_log("Errore durante la modifica dei ruoli utente: " . $e->getMessage());
-                $this->error("Errore durante l'assegnazione dei ruoli.", 500);
-            }
-        }
-
-        if (empty($updateFields) && $roleToAssign === null) {
-            $this->error('Nessun dato fornito per l\'aggiornamento o il ruolo è lo stesso.', 400);
-            return;
-        }
-
-        // 4. Costruisci ed esegui la query di aggiornamento per i campi dell'utente (se ce ne sono)
-        if (!empty($updateFields)) {
-            $sql = "UPDATE users SET " . implode(', ', $updateFields) . " WHERE id = ?;";
-            $stmt_update = $conn->prepare($sql);
-
-            $bindParams[] = $userIdToModify; // Aggiungi l'ID utente alla fine dei parametri
-            $types .= 'i'; // Aggiungi il tipo 'i' per l'ID utente
-
-            $refs = [];
-            foreach ($bindParams as $key => $value) {
-                $refs[$key] = &$bindParams[$key];
-            }
-            call_user_func_array([$stmt_update, 'bind_param'], array_merge([$types], $refs));
-
-            if (!$stmt_update->execute()) {
-                $this->error('Errore durante l\'aggiornamento dei dati dell\'utente: ' . $conn->error, 500);
-                $stmt_update->close();
+                $this->error("Errore aggiornamento ruoli: " . $e->getMessage(), 500);
                 return;
             }
-            $stmt_update->close(); // Chiudi lo statement dopo l'esecuzione
-
-            // Invia l'email se la password è stata aggiornata
-            if ($passwordUpdated) {
-                // Prepara i dati per il template dell'email
-                $template_vars = [
-                    'name' => $targetUserName,
-                    'email' => $targetUserEmail,
-                    'admin_name' => $updaterAdminName,
-                    'update_date' => date('d/m/Y'),
-                    'update_time' => date('H:i'),
-                ];
-
-                // Avvia l'output buffering per catturare il contenuto HTML del template
-                ob_start();
-                // Includi il file del template email. Assicurati che il percorso sia corretto.
-                // Esempio: se il template è in 'views/emails/admin_password_updated_email_template.php'
-                include __DIR__ . '/../../templates/email/reset_password_by_admin.php';
-                $email_html_body = ob_get_clean(); // Ottieni il contenuto del buffer
-
-                // Invia l'email
-                // Assumi che Mail::sendMail($to, $subject, $html_body, $from_name = null, $from_email = null)
-                try {
-                    Mail::sendMail(
-                        $targetUserEmail,
-                        'Aggiornamento Password del tuo account',
-                        $email_html_body,
-                       "",
-                    );
-                } catch (\Exception $e) {
-                    error_log("Errore nell'invio dell'email di aggiornamento password all'utente: " . $e->getMessage());
-                    // Non bloccare la risposta HTTP di successo se l'email fallisce, ma logga l'errore
-                }
-
-                ob_start();
-                include __DIR__ . '/../../templates/email/admin_reset_password.php';
-                $email_html_body = ob_get_clean();
-
-                try{
-                    Mail::sendMail(
-                        $this->email_user,
-                        "Aggiornamento Password di un account",
-                        $email_html_body
-                    );
-                } catch (\Exception $e){
-                    error_log("Errore nell'invio dell'email di aggiornamento password all'admin: " . $e->getMessage());
-                }
-            }
         }
 
-        $this->json(['message' => 'Utente aggiornato con successo.'], 200);
+        // Se ci sono campi da aggiornare
+        if (!empty($updateFields)) {
+            $sql = "UPDATE users SET " . implode(', ', $updateFields) . " WHERE id = ?";
+            $stmt = $conn->prepare($sql);
+
+            $bindParams[] = $userIdToModify;
+            $types .= 'i';
+
+            $refs = [];
+            foreach ($bindParams as $k => $v) {
+                $refs[$k] = &$bindParams[$k];
+            }
+
+            call_user_func_array([$stmt, 'bind_param'], array_merge([$types], $refs));
+            if (!$stmt->execute()) {
+                $this->error("Errore update utente: " . $conn->error, 500);
+                $stmt->close();
+                return;
+            }
+            $stmt->close();
+        }
+
+        $this->json([
+            'message' => 'Utente aggiornato con successo.',
+            'password_updated' => $passwordUpdated,
+            'roles_updated' => $rolesUpdated
+        ], 200);
     }
 
     /**
@@ -347,11 +290,11 @@ class UserController extends Controller // Estendi la classe Controller
         $stmt_target_user = $conn->prepare("SELECT school_id FROM users WHERE id = ? LIMIT 1;");
         $stmt_target_user->bind_param('i', $userIdToDelete);
         $stmt_target_user->execute();
-        $stmt_target_user->bind_result($targetUserSchoolId);
+        $stmt_target_user->bind_result($this->currentUserSchoolId);
         $stmt_target_user->fetch();
         $stmt_target_user->close();
 
-        if ($targetUserSchoolId === null) { // L'utente target non esiste
+        if ($this->currentUserId === null) { // L'utente target non esiste
             $this->error('Utente da eliminare non trovato.', 404);
             return;
         }
@@ -362,7 +305,7 @@ class UserController extends Controller // Estendi la classe Controller
 
         // Admin può gestire utenti nella propria sezione
         $canManageOwnSectionUsers = $this->permissionChecker->userHasPermission($this->currentUserId, 'users.delete.own_section');
-        $isOwnSectionUser = ($this->currentUserSchoolId !== null && $this->currentUserSchoolId === $targetUserSchoolId);
+        $isOwnSectionUser = ($this->currentUserSchoolId !== null && $this->currentUserSchoolId === $this->currentUserSchoolId);
 
         // L'utente corrente può eliminare l'utente target se:
         // A) È un Super Admin (ha manage_all_users)
@@ -479,46 +422,48 @@ class UserController extends Controller // Estendi la classe Controller
         // Ho aggiunto la colonna 'roles' alla SELECT. Assicurati che esista nella tua tabella 'users'.
         // Se i ruoli sono in una tabella separata, avrai bisogno di un JOIN.
         $stmt = $conn->prepare("
-            SELECT
-                u.id,
-                u.name,
-                u.email,
-                GROUP_CONCAT(ur.role_id) AS role_ids
-            FROM
-                users u
-            LEFT JOIN
-                user_role ur ON u.id = ur.user_id
-            WHERE 
-                u.school_id = ?
-            GROUP BY 
-                u.id, u.name, u.email
-        ");
+    SELECT 
+        u.id,
+        u.name,
+        u.email,
+        u.school_id,
+        u.created_at,
+        JSON_ARRAYAGG(
+            JSON_OBJECT(
+                'id', r.id,
+                'name', r.name,
+                'level', r.level,
+                'color', r.color,
+                'permissions', IFNULL(
+                    (
+                        SELECT JSON_ARRAYAGG(
+                            JSON_OBJECT('id', p.id, 'name', p.name)
+                        )
+                        FROM role_permissions rp
+                        INNER JOIN permissions p ON rp.permission_id = p.id
+                        WHERE rp.role_id = r.id
+                    ), JSON_ARRAY()
+                )
+            )
+        ) AS roles
+    FROM users u
+    LEFT JOIN user_role ur ON u.id = ur.user_id
+    LEFT JOIN roles r ON ur.role_id = r.id
+    WHERE u.school_id = ?
+    GROUP BY u.id, u.name, u.school_id
+");
         $stmt->bind_param('i', $schoolIdToFetch);
+        $stmt->execute();
+        $result = $stmt->get_result();
 
-        if (!$stmt->execute()) {
-            $this->error('Errore durante il recupero degli utenti: ' . $conn->error, 500);
-            return;
+        $users = [];
+        while ($row = $result->fetch_assoc()) {
+            $row['roles'] = $row['roles'] ? json_decode($row['roles'], true) : [];
+            $users[] = $row;
         }
 
-        $result = $stmt->get_result();
-        $usersData = $result->fetch_all(MYSQLI_ASSOC);
         $stmt->close();
 
-        // Processa i dati per convertire la stringa 'role_ids' in un array di interi
-        $processedUsers = [];
-        foreach ($usersData as $user) {
-            $roles = [];
-            if (!empty($user['role_ids'])) {
-                // Splitta la stringa di ID e converti ogni elemento in un intero
-                $roles = array_map('intval', explode(',', $user['role_ids']));
-            }
-            // Rimuovi la chiave 'role_ids' dalla riga originale e aggiungi l'array 'roles'
-            unset($user['role_ids']);
-            $user['roles'] = $roles;
-            $processedUsers[] = $user;
-        }
-
-        // Restituisce gli utenti processati in formato JSON
-        $this->json(['users' => $processedUsers], 200);
+        $this->json(['users' => $users], 200);
     }
 }

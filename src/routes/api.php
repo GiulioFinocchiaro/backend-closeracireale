@@ -24,7 +24,7 @@ $router->add("DELETE", "/api/users/delete", UserController::class, 'deleteUser')
 $router->add("POST", "/api/schools/add", SchoolController::class, 'addSchool');
 $router->add("PUT", "/api/schools/update", SchoolController::class, 'updateSchool');
 $router->add("DELETE", "/api/schools/delete", SchoolController::class, 'deleteSchool');
-$router->add("GET", "/api/schools/get_single_school_mine", SchoolController::class, 'getSingleSchoolMine');
+$router->add("GET", "/api/schools/get_single_school_mine", SchoolController::class, 'getSchoolDashboard');
 $router->add("GET", "/api/schools/get_all", SchoolController::class, 'getAllSchools');
 $router->add("POST", "/api/candidates/add", CandidatesController::class, 'addCandidates');
 $router->add("GET", "/api/candidates/get_single", CandidatesController::class, 'getSingleCandidates');
@@ -43,7 +43,7 @@ $router->add("GET", "/api/roles/get_mine_roles", RoleController::class, 'getMine
 $router->add("POST", "/api/campaigns/add", CampaignsController::class, 'addCampaign');
 $router->add("PUT", "/api/campaigns/update", CampaignsController::class, 'updateCampaign');
 $router->add("DELETE", "/api/campaigns/delete", CampaignsController::class, 'deleteCampaign');
-$router->add("GET", "/api/campaigns/get_single", CampaignsController::class, 'getSingleCampaign');
+$router->add("POST", "/api/campaigns/get_single", CampaignsController::class, 'getSingleCampaign');
 $router->add("POST", "/api/campaigns/get", CampaignsController::class, 'getCampaigns');
 $router->add("POST", "/api/campaigns/events/add", CampaignEventsController::class, 'addCampaignEvent');
 $router->add("PUT", "/api/campaigns/events/update", CampaignEventsController::class, 'updateCampaignEvent');
@@ -52,6 +52,7 @@ $router->add("GET", "/api/campaigns/events/get", CampaignEventsController::class
 $router->add("POST", "/api/campaigns/materials/add", CampaignMaterialsController::class, 'addCampaignMaterial');
 $router->add("PUT", "/api/campaigns/materials/update", CampaignMaterialsController::class, 'updateCampaignMaterial');
 $router->add("DELETE", "/api/campaigns/materials/delete", CampaignMaterialsController::class, 'deleteCampaignMaterial');
+$router->add("POST", "/api/campaigns/materials/get_graphic_assets", CampaignMaterialsController::class, 'getMediaToInsertInCampaignMaterials');
 $router->add("GET", "/api/campaigns/materials/get", CampaignMaterialsController::class, 'getMaterials');
 $router->add('POST', '/api/programs/add', ProgramsController::class, 'addProgram');
 $router->add('GET', '/api/programs/get_single', ProgramsController::class, 'getSingleProgram');
