@@ -67,3 +67,12 @@ $router->add('PUT', '/api/media/update', MediaController::class, 'updateGraphicA
 $router->add('DELETE', '/api/media/delete', MediaController::class, 'deleteGraphicAsset');
 $router->add("POST", '/api/roles/roles_by_level_or_lower', RoleController::class, 'getRolesByLevelOrLower');
 $router->add("GET", "/api/roles/mine_permissions", RoleController::class, 'getMinePermissions');
+
+// Graphic Contest routes
+$router->add('POST', '/api/graphic-contest/add', GraphicContestController::class, 'addGraphic');
+$router->add('POST', '/api/graphic-contest/like', GraphicContestController::class, 'addLike');
+$router->add('PUT', '/api/graphic-contest/approve', GraphicContestController::class, 'approveGraphic');
+$router->add('GET', '/api/graphic-contest/approved', GraphicContestController::class, 'getApprovedGraphics');
+$router->add('POST', '/api/graphic-contest/all', GraphicContestController::class, 'getAllGraphics');
+$router->add('PUT', '/api/graphic-contest/update', GraphicContestController::class, 'updateGraphic');
+$router->add('POST', '/api/graphic-contest/single', GraphicContestController::class, 'getSingleGraphic');
