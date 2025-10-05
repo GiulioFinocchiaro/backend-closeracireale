@@ -10,6 +10,7 @@ use Controllers\SchoolController;
 use Controllers\UserController;
 use Controllers\CandidatesController;
 use Controllers\CampaignEventsController;
+use Controllers\GraphicContestController;
 use Core\AuthMiddleware;
 
 /** @var \Core\Router $router */
