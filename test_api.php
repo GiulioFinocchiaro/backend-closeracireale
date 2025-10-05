@@ -1,14 +1,15 @@
 <?php
 // Script di test per verificare che il sistema funzioni
 
+require_once __DIR__ . '/vendor/autoload.php';
+require_once __DIR__ . '/src/config/config.php';
+
+use Database\Connection;
+
 echo "<h1>Test API Graphic Contest</h1>";
 
 // Test connessione database
 try {
-    require_once __DIR__ . '/src/config/config.php';
-    require_once __DIR__ . '/vendor/autoload.php';
-    
-    use Database\Connection;
     
     $conn = Connection::get();
     echo "<p><strong>✅ Connessione database: OK</strong></p>";
